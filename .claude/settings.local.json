@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:aviationstack.com)",
+      "WebFetch(domain:serpapi.com)",
+      "WebFetch(domain:www.flightapi.io)",
+      "WebFetch(domain:www.goflightlabs.com)",
+      "WebFetch(domain:www.searchapi.io)",
+      "WebFetch(domain:hasdata.com)",
+      "WebFetch(domain:docs.flightapi.io)"
+    ]
+  }
+}
