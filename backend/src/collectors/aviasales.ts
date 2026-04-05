@@ -18,12 +18,22 @@ interface CalendarResponse {
   data: Record<string, CalendarDay>
 }
 
+export interface FetchMonthCalendarResult {
+  records: FlightRecord[]
+  error?: string
+}
+
+function briefErr(err: unknown): string {
+  if (err instanceof Error) return err.message
+  return String(err)
+}
+
 export async function fetchMonthCalendar(
   origin: string,
   destination: string,
   yearMonth: string // YYYY-MM
-): Promise<FlightRecord[]> {
-  if (!isConfigured()) return []
+): Promise<FetchMonthCalendarResult> {
+  if (!isConfigured()) return { records: [] }
 
   try {
     const response = await axios.get<CalendarResponse>(`${BASE_URL}/calendar`, {
@@ -38,9 +48,9 @@ export async function fetchMonthCalendar(
       timeout: 15000,
     })
 
-    if (!response.data.success || !response.data.data) return []
+    if (!response.data.success || !response.data.data) return { records: [] }
 
-    return Object.entries(response.data.data)
+    const records = Object.entries(response.data.data)
       .map(([dateStr, day]) => ({
         flightDate: new Date(dateStr + 'T00:00:00'),
         returnDate: null,
@@ -52,9 +62,11 @@ export async function fetchMonthCalendar(
         source: 'aviasales' as const,
       }))
       .filter((r) => r.priceBrl > 0)
+    return { records }
   } catch (err) {
-    console.error(`[Aviasales] Erro ao buscar ${origin}→${destination} ${yearMonth}:`, err)
-    return []
+    const msg = briefErr(err)
+    console.error(`[Aviasales] Erro ao buscar ${origin}→${destination} ${yearMonth}: ${msg}`)
+    return { records: [], error: msg }
   }
 }
 

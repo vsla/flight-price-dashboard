@@ -12,8 +12,10 @@ export async function collectRoutes(fastify: FastifyInstance, prisma: PrismaClie
     isRunning = true
     // Roda em background
     runDailyFetch(prisma)
-      .then((count) => {
-        fastify.log.info(`Coleta concluída: ${count} snapshots`)
+      .then((report) => {
+        fastify.log.info(
+          `Coleta concluída: ${report.totalSaved} snapshots, ${report.warnings.length} aviso(s)`
+        )
         isRunning = false
       })
       .catch((err) => {

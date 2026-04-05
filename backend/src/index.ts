@@ -29,7 +29,10 @@ async function bootstrap() {
   // Scheduler: coleta diária às 06:00
   cron.schedule('0 6 * * *', async () => {
     fastify.log.info('[Cron] Iniciando coleta diária...')
-    await runDailyFetch(prisma)
+    const report = await runDailyFetch(prisma)
+    fastify.log.info(
+      `[Cron] Coleta concluída: ${report.totalSaved} snapshots, ${report.warnings.length} aviso(s)`
+    )
   })
 
   const port = parseInt(process.env.PORT ?? '3001')

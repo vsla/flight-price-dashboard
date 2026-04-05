@@ -92,7 +92,11 @@ export async function routesRoutes(fastify: FastifyInstance, prisma: PrismaClien
 
     // Roda em background
     runDailyFetch(prisma, routeId)
-      .then((count) => fastify.log.info(`Coleta da rota ${routeId} concluída: ${count} snapshots`))
+      .then((report) =>
+        fastify.log.info(
+          `Coleta da rota ${routeId} concluída: ${report.totalSaved} snapshots, ${report.warnings.length} aviso(s)`
+        )
+      )
       .catch((err) => fastify.log.error(`Erro na coleta da rota ${routeId}:`, err))
 
     return reply.send({

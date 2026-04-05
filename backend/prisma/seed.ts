@@ -5,10 +5,10 @@ const prisma = new PrismaClient()
 const DEFAULT_ROUTES = [
   { origin: 'REC', destination: 'LIS', tripType: 'oneway' },
   { origin: 'REC', destination: 'MAD', tripType: 'oneway' },
+  { origin: 'REC', destination: 'OPO', tripType: 'oneway' },
   { origin: 'LIS', destination: 'REC', tripType: 'oneway' },
   { origin: 'MAD', destination: 'REC', tripType: 'oneway' },
-  { origin: 'REC', destination: 'LIS', tripType: 'roundtrip' },
-  { origin: 'REC', destination: 'MAD', tripType: 'roundtrip' },
+  { origin: 'OPO', destination: 'REC', tripType: 'oneway' },
 ]
 
 async function main() {
@@ -25,7 +25,7 @@ async function main() {
       create: route,
     })
   }
-  console.log('Seed concluído: 6 rotas padrão inseridas.')
+  console.log('Seed concluído: 6 rotas oneway inseridas.')
 }
 
 main()

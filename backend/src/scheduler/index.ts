@@ -1,37 +1,95 @@
 import { PrismaClient } from '@prisma/client'
-import * as aviasales from '../collectors/aviasales'
-import * as amadeus from '../collectors/amadeus'
-import * as serpapi from '../collectors/serpapi'
+import * as searchapi from '../collectors/searchapi'
 import { FlightRecord } from '../collectors/types'
 
-const MONTHS_AHEAD = 12
+/** Resumo de uma rota — usado no relatório de coleta e no arquivo .log */
+export interface RouteFetchSummary {
+  routeId: number
+  origin: string
+  destination: string
+  tripType: string
+  durationMs: number
+  skipped: boolean
+  rowsFetched: number
+  chunkErrors: string[]
+  snapshotsInserted: number
+}
 
-function addMonths(date: Date, months: number): Date {
+export interface DailyFetchReport {
+  collectedAtIso: string
+  routeCount: number
+  totalSaved: number
+  perRoute: RouteFetchSummary[]
+  warnings: string[]
+}
+
+// Quantos dias à frente cobrir com o SearchAPI calendar (~10 meses).
+const CALENDAR_DAYS_AHEAD = 300
+
+// Dias por chunk: 2 chamadas por rota (180 + 120 dias).
+const SEARCHAPI_CHUNK_DAYS = 180
+
+// SearchAPI só é chamado se o último snapshot desta rota for mais velho que N dias.
+// 12 calls/run × semanal = 48 calls/mês (limite free tier: 100/mês)
+const SEARCHAPI_STALE_DAYS = 7
+
+function toDateStr(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+function addDays(date: Date, days: number): Date {
   const d = new Date(date)
-  d.setMonth(d.getMonth() + months)
+  d.setDate(d.getDate() + days)
   return d
 }
 
-function toYearMonth(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+// Verifica se o SearchAPI já foi chamado recentemente para esta rota
+async function isSearchApiStale(prisma: PrismaClient, routeId: number): Promise<boolean> {
+  const cutoff = new Date(Date.now() - SEARCHAPI_STALE_DAYS * 24 * 60 * 60 * 1000)
+  const recent = await prisma.priceSnapshot.findFirst({
+    where: {
+      routeId,
+      source: 'searchapi',
+      collectedAt: { gte: cutoff },
+    },
+    select: { id: true },
+  })
+  return !recent
 }
 
-// Merge por flight_date: mantém o mais barato de cada data
-function mergeByDate(records: FlightRecord[]): FlightRecord[] {
-  const map = new Map<string, FlightRecord>()
-  for (const r of records) {
-    const key = r.flightDate.toISOString().slice(0, 10)
-    const existing = map.get(key)
-    if (!existing || r.priceBrl < existing.priceBrl) {
-      map.set(key, r)
-    }
-  }
-  return Array.from(map.values())
+async function saveSnapshots(
+  prisma: PrismaClient,
+  records: FlightRecord[],
+  routeId: number,
+  collectedAt: Date
+): Promise<number> {
+  const validRecords = records.filter((r) => r.priceBrl > 0)
+  if (validRecords.length === 0) return 0
+
+  // Substituir dados antigos pelos novos para esta rota
+  await prisma.priceSnapshot.deleteMany({ where: { routeId } })
+
+  const result = await prisma.priceSnapshot.createMany({
+    data: validRecords.map((r) => ({
+      collectedAt,
+      routeId,
+      flightDate: r.flightDate,
+      returnDate: r.returnDate,
+      airline: r.airline,
+      priceBrl: r.priceBrl,
+      priceEur: r.priceEur,
+      stops: r.stops,
+      durationMinutes: r.durationMinutes,
+      source: r.source,
+    })),
+  })
+
+  return result.count
 }
 
-export async function runDailyFetch(prisma: PrismaClient): Promise<number>
-export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Promise<number>
-export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Promise<number> {
+export async function runDailyFetch(prisma: PrismaClient): Promise<DailyFetchReport>
+export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Promise<DailyFetchReport>
+export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Promise<DailyFetchReport> {
   const where = routeId
     ? { isActive: true, id: routeId }
     : { isActive: true }
@@ -39,101 +97,97 @@ export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Pro
   const routes = await prisma.route.findMany({ where })
   const collectedAt = new Date()
   let totalSaved = 0
+  const warnings: string[] = []
+  const perRoute: RouteFetchSummary[] = []
 
-  for (const route of routes) {
-    console.log(`[Scheduler] Coletando ${route.origin}→${route.destination} (${route.tripType})`)
+  console.log(
+    `[Scheduler] Início — ${routes.length} rota(s) ativa(s), collectedAt=${collectedAt.toISOString()}` +
+      (routeId != null ? `, filtro routeId=${routeId}` : '')
+  )
 
-    for (let i = 0; i < MONTHS_AHEAD; i++) {
-      const targetDate = addMonths(new Date(), i)
-      const yearMonth = toYearMonth(targetDate)
-
-      let records: FlightRecord[] = []
-
-      // Aviasales calendar sempre útil (oneway ou como proxy de datas para roundtrip)
-      const aviasalesOneway = await aviasales.fetchMonthCalendar(
-        route.origin, route.destination, yearMonth
-      )
-
-      if (route.tripType === 'oneway') {
-        // Primário: Aviasales calendar
-        records = aviasalesOneway.length > 0
-          ? aviasalesOneway
-          : await amadeus.fetchMonthSample(route.origin, route.destination, yearMonth) // fallback
-
-        // Merge: mantém mais barato por data
-        records = mergeByDate(records)
-
-        // Validação Amadeus: valida apenas o dia mais barato do mês (economiza cota)
-        if (records.length > 0 && amadeus.isConfigured()) {
-          const cheapest = records.reduce((a, b) => a.priceBrl < b.priceBrl ? a : b)
-          const dateStr = cheapest.flightDate.toISOString().slice(0, 10)
-          const validated = await amadeus.fetchFlightOffers(route.origin, route.destination, dateStr, 1)
-          if (validated.length > 0) {
-            records = mergeByDate([...records, ...validated])
-          }
-        }
-      } else {
-        // Roundtrip — Aviasales não tem calendário de round-trip
-        // SerpAPI: nas 5 datas mais baratas (economiza quota)
-        if (serpapi.isConfigured() && aviasalesOneway.length > 0) {
-          const top5 = [...aviasalesOneway]
-            .sort((a, b) => a.priceBrl - b.priceBrl)
-            .slice(0, 5)
-
-          for (const proxy of top5) {
-            const rtRecords = await serpapi.fetchRoundtrip(
-              route.origin, route.destination, proxy.flightDate
-            )
-            records.push(...rtRecords)
-            await new Promise((r) => setTimeout(r, 300))
-          }
-        }
-
-        // Amadeus como fallback/complemento para roundtrips
-        if (amadeus.isConfigured()) {
-          const top5 = [...aviasalesOneway]
-            .sort((a, b) => a.priceBrl - b.priceBrl)
-            .slice(0, 5)
-
-          for (const flight of top5) {
-            const dateStr = flight.flightDate.toISOString().slice(0, 10)
-            const rtRecords = await amadeus.fetchFlightOffers(
-              route.origin, route.destination, dateStr, 3
-            )
-            records.push(...rtRecords)
-            await new Promise((r) => setTimeout(r, 200))
-          }
-        }
-
-        // Merge: mantém mais barato por (date, returnDate)
-        records = mergeByDate(records)
-      }
-
-      // Salvar snapshots
-      const validRecords = records.filter((r) => r.priceBrl > 0)
-      if (validRecords.length > 0) {
-        await prisma.priceSnapshot.createMany({
-          data: validRecords.map((r) => ({
-            collectedAt,
-            routeId: route.id,
-            flightDate: r.flightDate,
-            returnDate: r.returnDate,
-            airline: r.airline,
-            priceBrl: r.priceBrl,
-            priceEur: r.priceEur,
-            stops: r.stops,
-            durationMinutes: r.durationMinutes,
-            source: r.source,
-          })),
-        })
-        totalSaved += validRecords.length
-        console.log(`  [${yearMonth}] ${validRecords.length} snapshots salvos`)
-      }
-
-      await new Promise((r) => setTimeout(r, 500)) // rate limit entre meses
+  if (!searchapi.isConfigured()) {
+    console.error('[Scheduler] SEARCHAPI_KEY não configurada — abortando')
+    return {
+      collectedAtIso: collectedAt.toISOString(),
+      routeCount: routes.length,
+      totalSaved: 0,
+      perRoute: [],
+      warnings: ['SEARCHAPI_KEY não configurada'],
     }
   }
 
-  console.log(`[Scheduler] Coleta concluída: ${totalSaved} snapshots no total`)
-  return totalSaved
+  for (const route of routes) {
+    const routeStarted = Date.now()
+    const routeLabel = `${route.origin}→${route.destination}`
+    console.log(`[Scheduler] Rota id=${route.id} ${routeLabel} (${route.tripType})`)
+
+    const records: FlightRecord[] = []
+    const chunkErrors: string[] = []
+    let skipped = false
+
+    const stale = await isSearchApiStale(prisma, route.id)
+    if (!stale) {
+      skipped = true
+      console.log(`  [SearchAPI] dados frescos, pulando`)
+    } else {
+      let dayOffset = 1
+      while (dayOffset <= CALENDAR_DAYS_AHEAD) {
+        const chunkEnd = Math.min(dayOffset + SEARCHAPI_CHUNK_DAYS - 1, CALENDAR_DAYS_AHEAD)
+        const dateStart = toDateStr(addDays(new Date(), dayOffset))
+        const dateEnd = toDateStr(addDays(new Date(), chunkEnd))
+        const { records: chunk, error } = await searchapi.fetchCalendar(
+          route.origin,
+          route.destination,
+          dateStart,
+          dateEnd
+        )
+        if (error) {
+          const line = `${dateStart}~${dateEnd}: ${error}`
+          chunkErrors.push(line)
+          warnings.push(`[${routeLabel}] SearchAPI ${line}`)
+        }
+        records.push(...chunk)
+        console.log(`  [SearchAPI] chunk ${dateStart}~${dateEnd}: ${chunk.length} datas`)
+        dayOffset = chunkEnd + 1
+        if (dayOffset <= CALENDAR_DAYS_AHEAD) {
+          await new Promise((res) => setTimeout(res, 500))
+        }
+      }
+    }
+
+    const rowsFetched = records.length
+    const saved = skipped ? 0 : await saveSnapshots(prisma, records, route.id, collectedAt)
+    totalSaved += saved
+    const routeMs = Date.now() - routeStarted
+
+    perRoute.push({
+      routeId: route.id,
+      origin: route.origin,
+      destination: route.destination,
+      tripType: route.tripType,
+      durationMs: routeMs,
+      skipped,
+      rowsFetched,
+      chunkErrors,
+      snapshotsInserted: saved,
+    })
+
+    console.log(
+      skipped
+        ? `  [Scheduler] pulado — rota em ${routeMs}ms`
+        : `  [Scheduler] ${saved} snapshot(s) gravado(s), ${rowsFetched} data(s) — rota em ${routeMs}ms`
+    )
+
+    await new Promise((res) => setTimeout(res, 500))
+  }
+
+  console.log(`[Scheduler] Fim — ${totalSaved} snapshot(s) no total`)
+
+  return {
+    collectedAtIso: collectedAt.toISOString(),
+    routeCount: routes.length,
+    totalSaved,
+    perRoute,
+    warnings,
+  }
 }

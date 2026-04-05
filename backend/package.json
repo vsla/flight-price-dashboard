@@ -10,6 +10,7 @@
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
+    "db:clear-snapshots": "tsx scripts/clear-snapshots.ts",
     "collect": "tsx src/collect.ts"
   },
   "dependencies": {

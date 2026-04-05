@@ -6,5 +6,5 @@ export interface FlightRecord {
   priceEur: number | null
   stops: number
   durationMinutes: number | null
-  source: 'aviasales' | 'amadeus' | 'serpapi'
+  source: 'aviasales' | 'amadeus' | 'serpapi' | 'searchapi'
 }
