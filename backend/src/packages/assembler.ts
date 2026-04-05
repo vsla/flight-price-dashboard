@@ -37,6 +37,29 @@ export interface FlightPackage {
   tags: PackageTag[]
 }
 
+export interface ReturnOption {
+  id: string
+  returnDate: string       // YYYY-MM-DD
+  returnFrom: string       // IATA
+  totalPriceBrl: number
+  stayDays: number
+  returnLeg: FlightLeg
+  strategy: PackageStrategy
+  sameAirline: boolean
+  tags: PackageTag[]
+}
+
+export interface GroupedPackage {
+  id: string               // hash(departureDate|flyTo)
+  departureDate: string    // YYYY-MM-DD
+  flyTo: string
+  origin: string
+  outbound: FlightLeg
+  cheapestPrice: number
+  returnOptions: ReturnOption[]
+  tags: PackageTag[]
+}
+
 export interface PackageFilters {
   destinations?: string[]
   minStayDays?: number
@@ -45,9 +68,12 @@ export interface PackageFilters {
   departBefore?: Date
   returnBefore?: Date
   maxStops?: number
+  maxPriceBrl?: number
   sameAirline?: boolean
   sortBy?: 'price' | 'score' | 'stayDays'
+  groupByDeparture?: boolean
   limit?: number
+  offset?: number
 }
 
 interface RawSnapshot {
@@ -148,6 +174,20 @@ function deduplicateSnapshots(snapshots: RawSnapshot[]): RawSnapshot[] {
   return Array.from(map.values())
 }
 
+// Após ordenação, mantém apenas o melhor pacote por (data saída, destino)
+function applyGroupByDeparture(packages: FlightPackage[]): FlightPackage[] {
+  const seen = new Set<string>()
+  const result: FlightPackage[] = []
+  for (const pkg of packages) {
+    const key = `${pkg.outbound.date}|${pkg.flyTo}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(pkg)
+    }
+  }
+  return result
+}
+
 export async function assemblePackages(
   prisma: PrismaClient,
   filters: PackageFilters = {}
@@ -160,20 +200,27 @@ export async function assemblePackages(
     departBefore,
     returnBefore,
     maxStops,
+    maxPriceBrl,
     sameAirline,
     sortBy = 'score',
+    groupByDeparture = false,
     limit = 50,
+    offset = 0,
   } = filters
 
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
   // Buscar todos os snapshots ativos com info da rota
+  const flightDateFilter: { gte: Date; lte?: Date } = {
+    gte: departAfter ?? today,
+    ...(departBefore ? { lte: departBefore } : {}),
+  }
+
   const rawData = await prisma.priceSnapshot.findMany({
     where: {
       route: { isActive: true },
-      flightDate: { gte: departAfter ?? today },
-      ...(departBefore && { flightDate: { lte: departBefore } }),
+      flightDate: flightDateFilter,
       priceBrl: { not: null, gt: 0 },
     },
     include: { route: true },
@@ -235,7 +282,7 @@ export async function assemblePackages(
       airline: s.airline,
       stops: s.stops,
       durationMinutes: s.durationMinutes,
-      priceBrl: 0, // preço já incluído no bundled
+      priceBrl: 0,
       source: s.source,
     }
 
@@ -278,7 +325,6 @@ export async function assemblePackages(
     for (const ret of returns) {
       if (maxStops !== undefined && ret.stops > maxStops) continue
 
-      // Deve voltar após partir
       if (ret.flightDate <= out.flightDate) continue
 
       const stay = daysBetween(out.flightDate, ret.flightDate)
@@ -344,20 +390,111 @@ export async function assemblePackages(
   packages.sort((a, b) => {
     if (sortBy === 'price') return a.totalPriceBrl - b.totalPriceBrl
     if (sortBy === 'stayDays') return b.stayDays - a.stayDays
-    return b.score - a.score // default: score desc
+    return b.score - a.score
   })
 
-  const limited = packages.slice(0, limit)
-  const cheapest = packages.length > 0 ? packages[0].totalPriceBrl : null
+  // Filtro de preço máximo
+  const priceFiltered = maxPriceBrl
+    ? packages.filter((p) => p.totalPriceBrl <= maxPriceBrl)
+    : packages
+
+  // Agrupamento: 1 card por (data saída, destino), mantendo o melhor pela ordenação atual
+  const grouped = groupByDeparture
+    ? applyGroupByDeparture(priceFiltered)
+    : priceFiltered
+
+  const total = grouped.length
+  const cheapestPrice = priceFiltered.length > 0 ? Math.min(...priceFiltered.map((p) => p.totalPriceBrl)) : null
+  const page = grouped.slice(offset, offset + limit)
 
   return {
-    packages: sortBy === 'price'
-      ? limited
-      : limited,
+    packages: page,
     meta: {
-      total: packages.length,
-      cheapest: allPrices.length > 0 ? Math.min(...allPrices) : null,
+      total,
+      cheapest: cheapestPrice,
       lastCollected,
+    },
+  }
+}
+
+export async function assembleGroupedPackages(
+  prisma: PrismaClient,
+  filters: PackageFilters = {}
+): Promise<{ groups: GroupedPackage[]; meta: { total: number; cheapest: number | null; lastCollected: string | null } }> {
+  const { sortBy = 'score', maxPriceBrl, limit = 15, offset = 0 } = filters
+
+  // Reutiliza toda a lógica de montagem de pacotes flat
+  const { packages: allPackages, meta } = await assemblePackages(prisma, {
+    ...filters,
+    groupByDeparture: false,
+    limit: 999999,
+    offset: 0,
+  })
+
+  // Agrupa por (departureDate, flyTo)
+  const groupMap = new Map<string, FlightPackage[]>()
+  for (const pkg of allPackages) {
+    const key = `${pkg.outbound.date}|${pkg.flyTo}`
+    const existing = groupMap.get(key)
+    if (existing) existing.push(pkg)
+    else groupMap.set(key, [pkg])
+  }
+
+  // Converte cada grupo em GroupedPackage
+  const groups: GroupedPackage[] = []
+  for (const [key, pkgs] of groupMap) {
+    // Ordena opções de volta por preço
+    pkgs.sort((a, b) => a.totalPriceBrl - b.totalPriceBrl)
+
+    const cheapest = pkgs[0]
+    if (maxPriceBrl && cheapest.totalPriceBrl > maxPriceBrl) continue
+
+    const returnOptions: ReturnOption[] = pkgs.map((pkg) => ({
+      id: pkg.id,
+      returnDate: pkg.return.date,
+      returnFrom: pkg.returnFrom,
+      totalPriceBrl: pkg.totalPriceBrl,
+      stayDays: pkg.stayDays,
+      returnLeg: pkg.return,
+      strategy: pkg.strategy,
+      sameAirline: pkg.sameAirline,
+      tags: pkg.tags,
+    }))
+
+    groups.push({
+      id: packageId(key),
+      departureDate: cheapest.outbound.date,
+      flyTo: cheapest.flyTo,
+      origin: cheapest.origin,
+      outbound: cheapest.outbound,
+      cheapestPrice: cheapest.totalPriceBrl,
+      returnOptions,
+      tags: cheapest.tags,
+    })
+  }
+
+  // Ordena grupos
+  groups.sort((a, b) => {
+    if (sortBy === 'price') return a.cheapestPrice - b.cheapestPrice
+    if (sortBy === 'stayDays') {
+      const aMax = Math.max(...a.returnOptions.map((r) => r.stayDays))
+      const bMax = Math.max(...b.returnOptions.map((r) => r.stayDays))
+      return bMax - aMax
+    }
+    // score: ordena por data de saída (mais próxima primeiro) como proxy de relevância
+    return a.departureDate.localeCompare(b.departureDate)
+  })
+
+  const total = groups.length
+  const cheapestOverall = groups.length > 0 ? groups[0].cheapestPrice : null
+  const page = groups.slice(offset, offset + limit)
+
+  return {
+    groups: page,
+    meta: {
+      total,
+      cheapest: cheapestOverall ?? meta.cheapest,
+      lastCollected: meta.lastCollected,
     },
   }
 }

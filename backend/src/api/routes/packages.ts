@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { PrismaClient } from '@prisma/client'
-import { assemblePackages, PackageFilters } from '../../packages/assembler'
+import { assembleGroupedPackages, PackageFilters } from '../../packages/assembler'
 
 export async function packagesRoutes(fastify: FastifyInstance, prisma: PrismaClient) {
   fastify.get('/api/packages', async (request, reply) => {
@@ -14,13 +14,15 @@ export async function packagesRoutes(fastify: FastifyInstance, prisma: PrismaCli
       departBefore: q.departBefore ? new Date(q.departBefore) : undefined,
       returnBefore: q.returnBefore ? new Date(q.returnBefore) : undefined,
       maxStops: q.maxStops !== undefined ? parseInt(q.maxStops) : undefined,
+      maxPriceBrl: q.maxPriceBrl ? parseInt(q.maxPriceBrl) : undefined,
       sameAirline: q.sameAirline === 'true' ? true : q.sameAirline === 'false' ? false : undefined,
       sortBy: (q.sortBy as PackageFilters['sortBy']) ?? 'score',
-      limit: q.limit ? parseInt(q.limit) : 50,
+      limit: q.limit ? parseInt(q.limit) : 15,
+      offset: q.offset ? parseInt(q.offset) : 0,
     }
 
     try {
-      const result = await assemblePackages(prisma, filters)
+      const result = await assembleGroupedPackages(prisma, filters)
       return reply.send(result)
     } catch (err) {
       fastify.log.error(err)
