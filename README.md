@@ -1,188 +1,249 @@
-# Flight Price Tracker — Recife → Europa
+# FlightSearch
 
-Monitora automaticamente preços de passagens aéreas, armazena o histórico e exibe um dashboard interativo com flutuação de preços ao longo do tempo.
-
-> **Contexto e motivação:** veja [docs/why.md](docs/why.md).
-
----
-
-## Requisitos
-
-- Python 3.11+
-- Docker Desktop
+Monitoramento inteligente de passagens aéreas de **Recife para Europa** (Lisboa e Madrid).
+Coleta preços diariamente e monta pacotes comparáveis — tickets separados, ida e volta combinado, open jaw — ranqueados por score.
 
 ---
 
-## Instalação
+## Stack
 
-```bash
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-```
-
-Copie `.env.example` para `.env` e preencha as chaves de API.
-
----
-
-## Configuração das APIs
-
-| Variável | Serviço | Notas |
-|---|---|---|
-| `AVIASALES_TOKEN` | [travelpayouts.com](https://travelpayouts.com/) | Gratuito |
-| `AMADEUS_CLIENT_ID` | [developers.amadeus.com](https://developers.amadeus.com/) | Usar ambiente **Production**, não sandbox |
-| `AMADEUS_CLIENT_SECRET` | idem | Solicitar "Self-Service Production Access" após criar a conta (1–2 dias úteis) |
+| Camada | Tecnologia |
+|--------|-----------|
+| Backend API | Node.js + Fastify + TypeScript |
+| ORM | Prisma |
+| Scheduler | node-cron (coleta diária às 06:00) |
+| Banco de dados | PostgreSQL + TimescaleDB |
+| Frontend | Next.js 16 + shadcn/ui + Tailwind CSS |
+| State management | TanStack Query v5 |
 
 ---
 
-## Como rodar
-
-```bash
-# 1. Subir o banco
-docker-compose up -d
-
-# 2. Inicializar banco e rotas padrão
-python -m src.main --init-only
-
-# 3. Coleta manual (uma vez)
-python -m src.main --once
-
-# 4. Dashboard
-streamlit run dashboard/app.py
-# Acesse http://localhost:8501
-
-# 5. Coleta automática diária (06:00)
-python -m src.main
-```
-
----
-
-## Gerenciar rotas
-
-```bash
-# Listar todas as rotas
-python scripts/routes.py list
-
-# Adicionar uma rota
-python scripts/routes.py add REC MAD oneway
-
-# Coletar preços de uma rota agora
-python scripts/routes.py fetch REC MAD oneway
-
-# Desativar / reativar
-python scripts/routes.py deactivate REC BCN
-python scripts/routes.py activate REC BCN
-
-# Deletar permanentemente
-python scripts/routes.py delete REC BCN oneway
-```
-
----
-
-## Rotas padrão
-
-| Rota | Tipo |
-|---|---|
-| REC → LIS | Só ida |
-| REC → MAD | Só ida |
-| LIS → REC | Só ida |
-| MAD → REC | Só ida |
-| REC → LIS → REC | Round-trip |
-| REC → MAD → REC | Round-trip |
-
----
-
-## Arquitetura
-
-```
-Scheduler (APScheduler, 06:00 diário)
-        │
-        ▼
-Fetchers (aviasales.py + amadeus.py)
-        │  Aviasales: 1 chamada = mês inteiro (calendário)
-        │  Amadeus: fallback quando Aviasales não cobre a rota
-        │           + validação do dia mais barato do mês
-        ▼
-TimescaleDB (PostgreSQL + extensão de séries temporais)
-        │  price_snapshots: 1 linha por voo por coleta
-        ▼
-Dashboard Streamlit (5 abas de análise)
-```
-
-### Consumo de API estimado (coleta diária)
-
-```
-Aviasales calendar:  rotas cobertas × 12 meses  (~48 chamadas/dia)
-Amadeus fallback:    rotas sem cobertura × 12 meses × ~8 datas/mês
-Amadeus validação:   1 chamada por rota por mês
-Total:               bem dentro do free tier (10.000 chamadas/mês Amadeus)
-```
-
----
-
-## Banco de dados
-
-| Tabela | Descrição |
-|---|---|
-| `routes` | Rotas monitoradas. Gerencie via `scripts/routes.py`. |
-| `price_snapshots` | Série histórica de preços. 1 linha por voo por coleta. |
-| `price_alerts` | Alertas por rota e threshold de preço (fase 3). |
-
-Usa **TimescaleDB** (extensão do PostgreSQL) para queries de séries temporais mais eficientes.
-
----
-
-## Estrutura de arquivos
+## Estrutura do Projeto
 
 ```
 FlightSearch/
-├── src/
-│   ├── fetchers/
-│   │   ├── aviasales.py     # Calendário mensal + cheap prices
-│   │   └── amadeus.py       # OAuth2, flight offers, fallback mensal
-│   ├── db/
-│   │   ├── models.py        # Route, PriceSnapshot, PriceAlert
-│   │   └── connection.py    # Engine, sessão, init_db(), rotas padrão
-│   ├── scheduler.py         # Lógica de coleta com fallback Aviasales→Amadeus
-│   └── main.py              # CLI: --once | --init-only | scheduler contínuo
-├── dashboard/
-│   ├── app.py               # App Streamlit
-│   └── charts.py            # Visualizações Plotly
-├── scripts/
-│   └── routes.py            # CLI para gerenciar rotas
+├── backend/
+│   ├── src/
+│   │   ├── api/routes/        # Endpoints REST
+│   │   │   ├── packages.ts    # GET  /api/packages
+│   │   │   ├── routes.ts      # CRUD /api/routes
+│   │   │   ├── snapshots.ts   # GET  /api/snapshots
+│   │   │   └── collect.ts     # POST /api/collect
+│   │   ├── collectors/
+│   │   │   ├── aviasales.ts   # Travelpayouts API (primário)
+│   │   │   ├── amadeus.ts     # Amadeus API (fallback + validação)
+│   │   │   └── serpapi.ts     # SerpAPI Google Flights (roundtrips)
+│   │   ├── scheduler/
+│   │   │   └── index.ts       # Orquestração da coleta diária
+│   │   ├── packages/
+│   │   │   └── assembler.ts   # Monta e ranqueia pacotes de viagem
+│   │   ├── index.ts           # Entry point do servidor
+│   │   └── collect.ts         # Script de coleta manual
+│   ├── prisma/
+│   │   ├── schema.prisma      # Models: Route, PriceSnapshot, PriceAlert, SearchQuery
+│   │   └── seed.ts            # Seed das 6 rotas padrão
+│   ├── .env.example
+│   ├── package.json
+│   └── tsconfig.json
+├── frontend/
+│   ├── app/                   # Next.js App Router
+│   ├── components/
+│   │   ├── SearchPanel.tsx    # Formulário de busca (salvo no localStorage)
+│   │   ├── FilterSidebar.tsx  # Filtros: paradas, companhia, ordenação
+│   │   ├── PackageCard.tsx    # Card de pacote com imagem Unsplash
+│   │   └── PackageList.tsx    # Lista com skeleton + empty state
+│   ├── lib/
+│   │   ├── api.ts             # Cliente HTTP + buildGoogleFlightsUrl
+│   │   ├── hooks.ts           # usePackages (TanStack Query) + usePersistedFilters
+│   │   └── types.ts           # Interfaces TypeScript compartilhadas
+│   └── package.json
+├── docker-compose.yml         # TimescaleDB + pgAdmin
 ├── docs/
-│   └── why.md               # Motivação e contexto do projeto
-├── docker-compose.yml       # TimescaleDB + pgAdmin (porta 5050)
-├── .env.example
-└── requirements.txt
+│   └── database-migration.md
+└── Dumps/                     # Backups do banco
 ```
 
 ---
 
-## Dashboard
+## Pré-requisitos
 
-| Aba | Descrição |
-|---|---|
-| Calendário de preços | Heatmap por mês/dia. Verde = barato, vermelho = caro. |
-| Flutuação de uma data | Evolução do preço de um voo específico ao longo das semanas. |
-| Top 10 mais baratos | Ranking das datas com menores preços nos próximos 12 meses. |
-| Ida vs Ida+Volta | Comparativo mensal entre comprar só ida vs round-trip. |
-| Sazonalidade | Preço médio por mês do ano. |
+- Node.js 20+
+- Docker (para o banco de dados)
 
 ---
 
-## Custo
+## Setup
 
-| Cenário | Custo |
-|---|---|
-| Rodando no seu PC | R$ 0/mês |
-| Cloud gratuita (Fly.io + Neon + Streamlit Cloud) | R$ 0/mês |
-| Cloud paga (Railway + Supabase) | ~R$ 35/mês |
+### 1. Banco de dados
+
+```bash
+docker compose up -d
+```
+
+Acesso ao pgAdmin: `http://localhost:5050` (admin@admin.com / admin)
+
+### 2. Backend
+
+```bash
+cd backend
+cp .env.example .env
+# Preencha as credenciais das APIs no .env
+
+npm install
+npx prisma db push        # Cria as tabelas
+npm run db:seed           # Insere as 6 rotas padrão
+npm run dev               # Inicia em localhost:3001
+```
+
+### 3. Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev               # Inicia em localhost:3000
+```
 
 ---
 
-## Próximas evoluções
+## Variáveis de Ambiente (`backend/.env`)
 
-- Alertas por Telegram quando preço cair abaixo de um threshold configurado
-- Deploy na nuvem para rodar 24/7 sem depender do PC local
-- Análise de antecedência: comparar preços comprados com 3 vs 6 meses de antecedência
-- Exportação CSV
+```env
+DATABASE_URL="postgresql://postgres:flighttracker@localhost:5432/flights"
+
+# Aviasales / Travelpayouts — https://travelpayouts.com/
+AVIASALES_TOKEN=your_token_here
+
+# Amadeus — https://developers.amadeus.com/
+AMADEUS_CLIENT_ID=your_client_id
+AMADEUS_CLIENT_SECRET=your_client_secret
+
+# SerpAPI — https://serpapi.com/ (free: 250 queries/mês)
+SERPAPI_KEY=your_serpapi_key
+
+FRONTEND_URL=http://localhost:3000
+PORT=3001
+```
+
+### APIs utilizadas
+
+| API | Uso | Free tier |
+|-----|-----|-----------|
+| **Aviasales/Travelpayouts** | Calendário de preços oneway (primário) | Gratuito |
+| **Amadeus** | Fallback + validação do dia mais barato | 10k chamadas/mês |
+| **SerpAPI** | Roundtrips via Google Flights | 250 queries/mês |
+
+---
+
+## API Reference
+
+### GET /api/packages
+Retorna pacotes de viagem montados e ranqueados.
+
+**Query params:**
+
+| Param | Tipo | Default | Descrição |
+|-------|------|---------|-----------|
+| `destinations` | string | `LIS,MAD` | Códigos IATA separados por vírgula |
+| `minStayDays` | number | `5` | Mínimo de dias de estadia |
+| `maxStayDays` | number | `60` | Máximo de dias de estadia |
+| `departAfter` | date | hoje | Data mínima de partida (YYYY-MM-DD) |
+| `departBefore` | date | — | Data máxima de partida |
+| `returnBefore` | date | — | Data máxima de retorno |
+| `maxStops` | number | — | Máximo de paradas (0 = direto) |
+| `sameAirline` | boolean | — | Filtrar por mesma companhia |
+| `sortBy` | string | `score` | `price` \| `score` \| `stayDays` |
+| `limit` | number | `50` | Máximo de resultados |
+
+**Estratégias de pacote:**
+- `roundtrip_bundled` — ticket único ida+volta
+- `separate_same` — dois tickets, mesmo aeroporto de retorno
+- `open_jaw` — vai para X, volta de Y (ex: REC→MAD + LIS→REC)
+
+**Tags automáticas:** `mais_barato`, `direto`, `melhor_valor`, `open_jaw`, `mesma_cia`, `longa_estadia`
+
+---
+
+### Gerenciamento de Rotas
+
+```
+GET    /api/routes            Lista todas as rotas
+POST   /api/routes            Cria nova rota
+PATCH  /api/routes/:id        Ativa ou desativa uma rota
+DELETE /api/routes/:id        Remove rota e seus snapshots
+POST   /api/routes/:id/collect  Coleta manual para uma rota
+```
+
+**Criar rota:**
+```bash
+curl -X POST http://localhost:3001/api/routes \
+  -H "Content-Type: application/json" \
+  -d '{"origin":"REC","destination":"BCN","tripType":"oneway"}'
+```
+
+**Desativar rota:**
+```bash
+curl -X PATCH http://localhost:3001/api/routes/3 \
+  -H "Content-Type: application/json" \
+  -d '{"isActive":false}'
+```
+
+---
+
+### Coleta
+
+```
+POST /api/collect              Coleta todas as rotas ativas
+GET  /api/collect/status       Verifica se coleta está rodando
+POST /api/routes/:id/collect   Coleta apenas uma rota
+```
+
+### Outros
+
+```
+GET /api/snapshots    Snapshots brutos (params: origin, destination, tripType, after, before)
+GET /health           Health check
+```
+
+---
+
+## Coleta Manual via Script
+
+```bash
+cd backend
+npm run collect
+```
+
+---
+
+## Rotas Padrão (seed)
+
+| Origem | Destino | Tipo |
+|--------|---------|------|
+| REC | LIS | oneway |
+| REC | MAD | oneway |
+| LIS | REC | oneway |
+| MAD | REC | oneway |
+| REC | LIS | roundtrip |
+| REC | MAD | roundtrip |
+
+---
+
+## Scheduler
+
+Coleta automática todo dia às **06:00** enquanto o servidor estiver ativo.
+
+**Lógica por rota:**
+1. **Oneway:** Aviasales calendar → fallback Amadeus → validação Amadeus no dia mais barato
+2. **Roundtrip:** SerpAPI nas 5 datas mais baratas → Amadeus como complemento
+
+---
+
+## Banco de Dados
+
+```bash
+docker compose up -d           # Inicia TimescaleDB
+npx prisma db push             # Aplica schema
+npx prisma studio              # Interface visual (localhost:5555)
+```
+
+Backup/restore: veja `docs/database-migration.md`

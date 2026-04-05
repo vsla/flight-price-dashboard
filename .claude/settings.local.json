@@ -8,7 +8,17 @@
       "WebFetch(domain:www.goflightlabs.com)",
       "WebFetch(domain:www.searchapi.io)",
       "WebFetch(domain:hasdata.com)",
-      "WebFetch(domain:docs.flightapi.io)"
+      "WebFetch(domain:docs.flightapi.io)",
+      "Bash(npx create-next-app@latest frontend --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --yes)",
+      "Bash(npm install:*)",
+      "Bash(npx shadcn@latest init --defaults --yes)",
+      "Bash(npx shadcn@latest add badge button card checkbox label separator sheet slider)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(docker ps:*)",
+      "Bash(npx prisma:*)",
+      "Bash(PRISMA_MIGRATE_SKIP_GENERATE=1 npx prisma db push)",
+      "Bash(curl.exe -s \"http://localhost:3001/api/packages?destinations=LIS,MAD&minStayDays=15&maxStayDays=45\" 2>&1)"
     ]
   }
 }

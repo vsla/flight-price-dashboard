@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Route {
+  id          Int             @id @default(autoincrement())
+  origin      String          @db.VarChar(3)
+  destination String          @db.VarChar(3)
+  tripType    String          @db.VarChar(10) @map("trip_type")
+  isActive    Boolean         @default(true) @map("is_active")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  snapshots   PriceSnapshot[]
+  alerts      PriceAlert[]
+
+  @@unique([origin, destination, tripType])
+  @@map("routes")
+}
+
+model PriceSnapshot {
+  id              Int       @id @default(autoincrement())
+  collectedAt     DateTime  @default(now()) @map("collected_at")
+  routeId         Int       @map("route_id")
+  flightDate      DateTime  @map("flight_date") @db.Date
+  returnDate      DateTime? @map("return_date") @db.Date
+  airline         String?   @db.VarChar(100)
+  priceBrl        Decimal?  @map("price_brl") @db.Decimal(10, 2)
+  priceEur        Decimal?  @map("price_eur") @db.Decimal(10, 2)
+  stops           Int       @default(0)
+  durationMinutes Int?      @map("duration_minutes")
+  source          String    @db.VarChar(20)
+  route           Route     @relation(fields: [routeId], references: [id])
+
+  @@map("price_snapshots")
+}
+
+model PriceAlert {
+  id           Int       @id @default(autoincrement())
+  routeId      Int       @map("route_id")
+  thresholdBrl Decimal?  @map("threshold_brl") @db.Decimal(10, 2)
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  notifiedAt   DateTime? @map("notified_at")
+  route        Route     @relation(fields: [routeId], references: [id])
+
+  @@map("price_alerts")
+}
+
+// Preparado para produto futuro (multi-usuário + alertas por e-mail)
+model SearchQuery {
+  id           Int      @id @default(autoincrement())
+  userId       String?  @map("user_id")
+  origins      String[]
+  destinations String[]
+  minStayDays  Int      @map("min_stay_days")
+  maxStayDays  Int      @map("max_stay_days")
+  departAfter  DateTime? @map("depart_after") @db.Date
+  departBefore DateTime? @map("depart_before") @db.Date
+  alertEmail   String?  @map("alert_email")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  lastRunAt    DateTime? @map("last_run_at")
+
+  @@map("search_queries")
+}
