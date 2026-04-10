@@ -20,7 +20,8 @@
       "Bash(PRISMA_MIGRATE_SKIP_GENERATE=1 npx prisma db push)",
       "Bash(curl.exe -s \"http://localhost:3001/api/packages?destinations=LIS,MAD&minStayDays=15&maxStayDays=45\" 2>&1)",
       "Bash(npx tsx -e \":*)",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "Bash(grep -r \"playwright\\\\|puppeteer\" /c/Users/victo/OneDrive/Documentos/Dev/FlightSearch --include=*.json --include=*.ts --include=*.js)"
     ]
   }
 }

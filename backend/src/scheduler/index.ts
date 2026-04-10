@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client'
-import * as searchapi from '../collectors/searchapi'
+// import * as searchapi from '../collectors/searchapi'   // v1: substituído pelo Skyscanner scraper
+import * as skyscanner from '../collectors/skyscanner'
 import { FlightRecord } from '../collectors/types'
 
 /** Resumo de uma rota — usado no relatório de coleta e no arquivo .log */
@@ -23,33 +24,42 @@ export interface DailyFetchReport {
   warnings: string[]
 }
 
-// Quantos dias à frente cobrir com o SearchAPI calendar (~10 meses).
-const CALENDAR_DAYS_AHEAD = 300
+// v1: Skyscanner como fonte de calendário
+// Quantos meses à frente cobrir (~10 meses)
+const SKYSCANNER_MONTHS_AHEAD = 12
 
-// Dias por chunk: 2 chamadas por rota (180 + 120 dias).
-const SEARCHAPI_CHUNK_DAYS = 180
+// Skyscanner só é chamado se o último snapshot desta rota for mais velho que N dias.
+const SKYSCANNER_STALE_DAYS = 3
 
-// SearchAPI só é chamado se o último snapshot desta rota for mais velho que N dias.
-// 12 calls/run × semanal = 48 calls/mês (limite free tier: 100/mês)
-const SEARCHAPI_STALE_DAYS = 7
+// v1 comentado (SearchAPI):
+// const CALENDAR_DAYS_AHEAD = 300
+// const SEARCHAPI_CHUNK_DAYS = 180
+// const SEARCHAPI_STALE_DAYS = 7
 
-function toDateStr(date: Date): string {
-  return date.toISOString().slice(0, 10)
+/**
+ * Gera uma lista de meses no formato 'YYYY-MM' a partir do mês atual.
+ * Ex: generateMonthRange(new Date('2026-04-10'), 3) → ['2026-04', '2026-05', '2026-06']
+ */
+function generateMonthRange(from: Date, count: number): string[] {
+  const months: string[] = []
+  const year = from.getFullYear()
+  const month = from.getMonth() // 0-indexed
+  for (let i = 0; i < count; i++) {
+    const d = new Date(year, month + i, 1)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    months.push(`${y}-${m}`)
+  }
+  return months
 }
 
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
-}
-
-// Verifica se o SearchAPI já foi chamado recentemente para esta rota
-async function isSearchApiStale(prisma: PrismaClient, routeId: number): Promise<boolean> {
-  const cutoff = new Date(Date.now() - SEARCHAPI_STALE_DAYS * 24 * 60 * 60 * 1000)
+// Verifica se o Skyscanner já foi chamado recentemente para esta rota
+async function isSkyscannerStale(prisma: PrismaClient, routeId: number): Promise<boolean> {
+  const cutoff = new Date(Date.now() - SKYSCANNER_STALE_DAYS * 24 * 60 * 60 * 1000)
   const recent = await prisma.priceSnapshot.findFirst({
     where: {
       routeId,
-      source: 'searchapi',
+      source: 'skyscanner',
       collectedAt: { gte: cutoff },
     },
     select: { id: true },
@@ -66,8 +76,8 @@ async function saveSnapshots(
   const validRecords = records.filter((r) => r.priceBrl > 0)
   if (validRecords.length === 0) return 0
 
-  // Substituir dados antigos pelos novos para esta rota
-  await prisma.priceSnapshot.deleteMany({ where: { routeId } })
+  // Substituir apenas snapshots desta fonte para esta rota
+  await prisma.priceSnapshot.deleteMany({ where: { routeId, source: 'skyscanner' } })
 
   const result = await prisma.priceSnapshot.createMany({
     data: validRecords.map((r) => ({
@@ -105,14 +115,14 @@ export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Pro
       (routeId != null ? `, filtro routeId=${routeId}` : '')
   )
 
-  if (!searchapi.isConfigured()) {
-    console.error('[Scheduler] SEARCHAPI_KEY não configurada — abortando')
+  if (!skyscanner.isConfigured()) {
+    console.warn('[Scheduler] SKYSCANNER_ENABLED não está true — adicione ao .env para habilitar coleta')
     return {
       collectedAtIso: collectedAt.toISOString(),
       routeCount: routes.length,
       totalSaved: 0,
       perRoute: [],
-      warnings: ['SEARCHAPI_KEY não configurada'],
+      warnings: ['SKYSCANNER_ENABLED não configurado'],
     }
   }
 
@@ -125,32 +135,30 @@ export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Pro
     const chunkErrors: string[] = []
     let skipped = false
 
-    const stale = await isSearchApiStale(prisma, route.id)
+    const stale = await isSkyscannerStale(prisma, route.id)
     if (!stale) {
       skipped = true
-      console.log(`  [SearchAPI] dados frescos, pulando`)
+      console.log(`  [Skyscanner] dados frescos, pulando`)
     } else {
-      let dayOffset = 1
-      while (dayOffset <= CALENDAR_DAYS_AHEAD) {
-        const chunkEnd = Math.min(dayOffset + SEARCHAPI_CHUNK_DAYS - 1, CALENDAR_DAYS_AHEAD)
-        const dateStart = toDateStr(addDays(new Date(), dayOffset))
-        const dateEnd = toDateStr(addDays(new Date(), chunkEnd))
-        const { records: chunk, error } = await searchapi.fetchCalendar(
+      const months = generateMonthRange(new Date(), SKYSCANNER_MONTHS_AHEAD)
+      for (let i = 0; i < months.length; i++) {
+        const ym = months[i]
+        const { records: chunk, error } = await skyscanner.fetchMonthView(
           route.origin,
           route.destination,
-          dateStart,
-          dateEnd
+          ym
         )
         if (error) {
-          const line = `${dateStart}~${dateEnd}: ${error}`
+          const line = `${ym}: ${error}`
           chunkErrors.push(line)
-          warnings.push(`[${routeLabel}] SearchAPI ${line}`)
+          warnings.push(`[${routeLabel}] Skyscanner ${line}`)
         }
         records.push(...chunk)
-        console.log(`  [SearchAPI] chunk ${dateStart}~${dateEnd}: ${chunk.length} datas`)
-        dayOffset = chunkEnd + 1
-        if (dayOffset <= CALENDAR_DAYS_AHEAD) {
-          await new Promise((res) => setTimeout(res, 500))
+        console.log(`  [Skyscanner] ${ym}: ${chunk.length} data(s)`)
+
+        // Delay anti-bot entre meses (exceto após o último)
+        if (i < months.length - 1) {
+          await new Promise((res) => setTimeout(res, 5000 + Math.random() * 5000))
         }
       }
     }
@@ -178,8 +186,14 @@ export async function runDailyFetch(prisma: PrismaClient, routeId?: number): Pro
         : `  [Scheduler] ${saved} snapshot(s) gravado(s), ${rowsFetched} data(s) — rota em ${routeMs}ms`
     )
 
-    await new Promise((res) => setTimeout(res, 500))
+    // Delay entre rotas (anti-bot)
+    if (route !== routes[routes.length - 1]) {
+      await new Promise((res) => setTimeout(res, 8000 + Math.random() * 7000))
+    }
   }
+
+  // Liberar o browser ao fim do run
+  await skyscanner.closeBrowser()
 
   console.log(`[Scheduler] Fim — ${totalSaved} snapshot(s) no total`)
 

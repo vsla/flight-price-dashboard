@@ -11,7 +11,10 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "db:clear-snapshots": "tsx scripts/clear-snapshots.ts",
-    "collect": "tsx src/collect.ts"
+    "db:dump": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dump-db.ps1",
+    "db:dump:data": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dump-db.ps1 data",
+    "collect": "tsx src/collect.ts",
+    "install:playwright": "playwright install chromium --with-deps"
   },
   "dependencies": {
     "@prisma/client": "^5.14.0",
@@ -27,5 +30,8 @@
     "prisma": "^5.14.0",
     "tsx": "^4.16.2",
     "typescript": "^5.5.2"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.44.0"
   }
 }

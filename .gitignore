@@ -41,3 +41,6 @@ venv/
 # OS & editor
 .DS_Store
 *.dump
+
+# Database exports (local)
+/Dumps/
