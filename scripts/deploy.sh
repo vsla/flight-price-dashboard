@@ -2,24 +2,14 @@
 # Chamado pelo GitHub Actions via SSH a cada push no main
 set -euo pipefail
 
-APP_DIR="/opt/flightsearch"
-cd "$APP_DIR"
+cd /opt/flightsearch
 
 echo "==> git pull"
 git pull origin main
 
-echo "==> backend: install + generate + build"
-cd backend
+echo "==> install + build"
 npm install
-npx prisma generate
-npx tsc
-cd ..
-
-echo "==> frontend: install + build"
-cd frontend
-npm install
-npm run build -w frontend
-cd ..
+npm run build
 
 echo "==> pm2 restart"
 pm2 restart ecosystem.config.js --update-env
