@@ -11,13 +11,14 @@ git pull origin main
 echo "==> backend: install + build"
 cd backend
 npm ci --omit=dev
-npm run build
+npx prisma generate
+npx tsc
 cd ..
 
 echo "==> frontend: install + build"
 cd frontend
 npm ci --omit=dev
-npm run build
+npx next build
 cd ..
 
 echo "==> pm2 restart"
