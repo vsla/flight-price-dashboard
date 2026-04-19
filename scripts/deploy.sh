@@ -8,17 +8,18 @@ cd "$APP_DIR"
 echo "==> git pull"
 git pull origin main
 
-echo "==> backend: install + build"
-cd backend
+echo "==> install (workspace root)"
 npm ci --omit=dev
+
+echo "==> backend: generate + build"
+cd backend
 npx prisma generate
 npx tsc
 cd ..
 
-echo "==> frontend: install + build"
+echo "==> frontend: build"
 cd frontend
-npm ci --omit=dev
-npx next build
+../node_modules/.bin/next build
 cd ..
 
 echo "==> pm2 restart"
