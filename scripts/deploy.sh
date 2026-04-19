@@ -18,7 +18,7 @@ cd ..
 echo "==> frontend: install + build"
 cd frontend
 npm install
-node_modules/.bin/next build
+npm run build -w frontend
 cd ..
 
 echo "==> pm2 restart"
