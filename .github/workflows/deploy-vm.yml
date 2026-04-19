@@ -10,10 +10,41 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy via SSH
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build backend
+        run: cd backend && npm install && npm run build
+
+      - name: Build frontend
+        run: cd frontend && npm install && npm run build
+
+      - name: Upload build artifacts to VM
+        env:
+          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          echo "$SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          SSH="ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no"
+          rsync -az --delete -e "$SSH" \
+            backend/dist/ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/opt/flightsearch/backend/dist/
+          rsync -az --delete -e "$SSH" \
+            frontend/.next/ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/opt/flightsearch/frontend/.next/
+
+      - name: Install runtime deps and restart
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          script: bash /opt/flightsearch/scripts/deploy.sh
+          command_timeout: 5m
+          script: |
+            cd /opt/flightsearch
+            git pull origin main
+            cd backend && npm install --omit=dev && cd ..
+            cd frontend && npm install --omit=dev && cd ..
+            pm2 restart /opt/flightsearch/ecosystem.config.js --update-env
+            pm2 save
