@@ -22,7 +22,7 @@ function formatLastCollected(iso: string | null): string {
 }
 
 // Gera lista de meses dos próximos N meses
-function getMonthOptions(n = 10) {
+function getMonthOptions(n = 15) {
   const months: { label: string; value: string }[] = []
   const now = new Date()
   for (let i = 0; i < n; i++) {

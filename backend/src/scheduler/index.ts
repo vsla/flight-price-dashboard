@@ -25,8 +25,8 @@ export interface DailyFetchReport {
 }
 
 // v1: Skyscanner como fonte de calendário
-// Quantos meses à frente cobrir (~10 meses)
-const SKYSCANNER_MONTHS_AHEAD = 12
+// Quantos meses à frente cobrir
+const SKYSCANNER_MONTHS_AHEAD = 15
 
 // Skyscanner só é chamado se o último snapshot desta rota for mais velho que N dias.
 const SKYSCANNER_STALE_DAYS = 3
