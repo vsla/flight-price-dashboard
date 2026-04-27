@@ -87,6 +87,8 @@ export interface SearchFilters {
   maxPriceBrl: number | undefined
   sameAirline: boolean | undefined
   sortBy: 'price' | 'stayDays'
+  /** Meses selecionados no filtro (YYYY-MM), vazio = todos */
+  selectedMonths: string[]
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -100,6 +102,17 @@ export const DEFAULT_FILTERS: SearchFilters = {
   maxPriceBrl: undefined,
   sameAirline: undefined,
   sortBy: 'price',
+  selectedMonths: [],
+}
+
+export interface CalendarDay {
+  date: string         // YYYY-MM-DD
+  destination: string  // IATA
+  cheapestPrice: number
+}
+
+export interface CalendarResponse {
+  days: CalendarDay[]
 }
 
 export const DESTINATION_INFO: Record<string, { name: string; city: string; country: string; unsplashId: string }> = {

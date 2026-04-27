@@ -25,7 +25,8 @@
       "Read(//c/Users/victo/OneDrive/Documentos/Dev/**)",
       "Read(//c/Users/victo/.ssh/**)",
       "Bash(claude *)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "Bash(bash *)"
     ]
   }
 }

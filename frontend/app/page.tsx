@@ -1,114 +1,233 @@
 'use client'
 
-import Link from 'next/link'
-import { useState } from 'react'
-import { LayoutDashboard, PlaneTakeoff, SlidersHorizontal } from 'lucide-react'
-import { SearchPanel } from '@/components/SearchPanel'
-import { FilterSidebar } from '@/components/FilterSidebar'
-import { PackageList } from '@/components/PackageList'
-import { usePersistedFilters, useInfinitePackages } from '@/lib/hooks'
-import { triggerCollect } from '@/lib/api'
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
-import { Button } from '@/components/ui/button'
+import { useState, useMemo } from 'react'
+import { NavBar } from '@/components/NavBar'
+import { MonthPills } from '@/components/MonthPills'
+import { CalendarPanel } from '@/components/CalendarPanel'
+import { DealsGrid } from '@/components/DealsGrid'
+import { usePersistedFilters, useInfinitePackages, useCalendar } from '@/lib/hooks'
+import { cn } from '@/lib/utils'
+
+const DESTINATIONS = ['MAD', 'LIS', 'OPO']
+
+function lastDayOfMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(y, m, 0)
+  return d.toISOString().slice(0, 10)
+}
+
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function futureStr(months = 12): string {
+  const d = new Date()
+  d.setMonth(d.getMonth() + months)
+  return d.toISOString().slice(0, 10)
+}
 
 export default function Home() {
   const { filters, setFilters, hydrated } = usePersistedFilters()
-  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfinitePackages(filters, hydrated)
-  const [isCollecting, setIsCollecting] = useState(false)
+  const [selectedDay, setSelectedDay] = useState<string | null>(null)
 
-  async function handleCollect() {
-    setIsCollecting(true)
-    try {
-      await triggerCollect()
-    } catch {
-      // Silencioso — backend pode não estar disponível
-    } finally {
-      setTimeout(() => setIsCollecting(false), 2000)
+  const selectedMonths: string[] = filters.selectedMonths ?? []
+
+  // Calendar always shows full 12-month range
+  const { data: calData } = useCalendar(
+    filters.destinations.length > 0 ? filters.destinations : DESTINATIONS,
+    todayStr(),
+    futureStr(12),
+    filters.minStayDays,
+    filters.maxStayDays,
+    hydrated,
+  )
+
+  const calendarDays = calData?.days ?? []
+
+  // Derive available months from calendar data
+  const availableMonths = useMemo(() => {
+    const set = new Set<string>()
+    for (const d of calendarDays) set.add(d.date.slice(0, 7))
+    return [...set].sort()
+  }, [calendarDays])
+
+  // Effective date range for deals query
+  const { departAfter, departBefore } = useMemo(() => {
+    if (selectedDay) {
+      return { departAfter: selectedDay, departBefore: selectedDay }
     }
-  }
+    if (selectedMonths.length > 0) {
+      const sorted = [...selectedMonths].sort()
+      return {
+        departAfter: `${sorted[0]}-01`,
+        departBefore: lastDayOfMonth(sorted[sorted.length - 1]),
+      }
+    }
+    return { departAfter: todayStr(), departBefore: futureStr(12) }
+  }, [selectedDay, selectedMonths])
+
+  const effectiveFilters = useMemo(() => ({
+    ...filters,
+    departAfter,
+    departBefore,
+    destinations: filters.destinations.length > 0 ? filters.destinations : DESTINATIONS,
+  }), [filters, departAfter, departBefore])
+
+  const {
+    data,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfinitePackages(effectiveFilters, hydrated)
 
   const packages = data?.pages.flatMap((p) => p.groups) ?? []
   const meta = data?.pages[0]?.meta ?? { total: 0, cheapest: null, lastCollected: null }
 
+  // Deals panel header text
+  const dealsTitle = useMemo(() => {
+    if (selectedDay) {
+      const d = new Date(selectedDay + 'T12:00:00')
+      return `Pacotes · saindo ${d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' }).replace('.', '')}`
+    }
+    if (selectedMonths.length === 1) {
+      const [y, m] = selectedMonths[0].split('-').map(Number)
+      const name = new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long' })
+      return `Pacotes · ${name} ${y}`
+    }
+    if (selectedMonths.length > 1) {
+      return `Pacotes · ${selectedMonths.length} meses selecionados`
+    }
+    return 'Todos os pacotes'
+  }, [selectedDay, selectedMonths])
+
+  const dealsSubtitle = useMemo(() => {
+    const destStr = (filters.destinations.length > 0 ? filters.destinations : DESTINATIONS).join(', ')
+    const total = meta.total
+    return `${total} ${total === 1 ? 'opção' : 'opções'} · ${destStr} · ${filters.minStayDays}–${filters.maxStayDays} dias`
+  }, [meta.total, filters])
+
+  function handleDayClick(date: string) {
+    setSelectedDay((prev) => (prev === date ? null : date))
+  }
+
+  function handleMonthClick(ym: string) {
+    setSelectedDay(null)
+    const next = selectedMonths.includes(ym)
+      ? selectedMonths.filter((m) => m !== ym)
+      : [...selectedMonths, ym]
+    setFilters({ selectedMonths: next })
+  }
+
+  function handleMonthPillChange(months: string[]) {
+    setSelectedDay(null)
+    setFilters({ selectedMonths: months })
+  }
+
+  function toggleDest(dest: string) {
+    const cur = filters.destinations.length > 0 ? filters.destinations : DESTINATIONS
+    const next = cur.includes(dest)
+      ? cur.filter((d) => d !== dest)
+      : [...cur, dest]
+    setFilters({ destinations: next.length > 0 ? next : DESTINATIONS })
+  }
+
+  const activeDests = filters.destinations.length > 0 ? filters.destinations : DESTINATIONS
+
   return (
-    <div className="flex flex-col min-h-screen">
-      {/* Navbar */}
-      <header className="bg-white border-b border-border sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
-          <PlaneTakeoff className="w-5 h-5 text-primary" />
-          <span className="font-bold text-foreground tracking-tight">FlightSearch</span>
-          <span className="text-muted-foreground text-sm hidden sm:block">Recife → Europa</span>
+    <div className="flex flex-col h-dvh overflow-hidden">
+      <NavBar />
 
-          <div className="ml-auto flex items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1.5 transition-colors"
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span className="hidden sm:inline">Coleta</span>
-            </Link>
-            {/* Filtros mobile (trigger) */}
-            <div className="md:hidden">
-              <Sheet>
-              <SheetTrigger
-                render={<Button variant="outline" size="sm" className="gap-2" />}
+      {/* Controls bar — row 1: destinations + stay + sort */}
+      <div className="bg-white border-b border-border shrink-0">
+        <div className="px-3 pt-2 pb-1 flex items-center gap-2">
+          {/* Destination pills */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline text-[10px] font-bold text-muted-foreground uppercase tracking-wide">Destino</span>
+            {DESTINATIONS.map((d) => (
+              <button
+                key={d}
+                onClick={() => toggleDest(d)}
+                className={cn(
+                  'px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors',
+                  activeDests.includes(d)
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-white text-foreground border-border hover:border-primary/50',
+                )}
               >
-                <SlidersHorizontal className="w-4 h-4" />
-                Filtros
-              </SheetTrigger>
-              <SheetContent side="left" className="w-72 pt-8">
-                <FilterSidebar
-                  filters={filters}
-                  onChange={setFilters}
-                  totalResults={meta.total}
-                />
-              </SheetContent>
-            </Sheet>
-            </div>
+                {d}
+              </button>
+            ))}
           </div>
-        </div>
-      </header>
 
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-6 flex flex-col gap-6">
-        {/* Search Panel */}
-        <SearchPanel
-          filters={filters}
-          onChange={setFilters}
-          onCollect={handleCollect}
-          isCollecting={isCollecting}
-          lastCollected={meta.lastCollected}
-        />
+          <div className="flex-1" />
 
-        {/* Layout: sidebar + resultados */}
-        <div className="flex gap-6 items-start">
-          {/* Sidebar — desktop only */}
-          <aside className="hidden md:block w-52 shrink-0 bg-white rounded-2xl border border-border shadow-sm p-4 sticky top-20">
-            <FilterSidebar
-              filters={filters}
-              onChange={setFilters}
-              totalResults={meta.total}
+          {/* Stay duration */}
+          <div className="flex items-center gap-1 shrink-0">
+            <input
+              type="range" min={3} max={60} value={filters.minStayDays}
+              onChange={(e) => setFilters({ minStayDays: Number(e.target.value) })}
+              className="w-12 sm:w-16 accent-primary"
             />
-          </aside>
-
-          {/* Lista de pacotes */}
-          <div className="flex-1 min-w-0">
-            <PackageList
-              packages={packages}
-              isLoading={!hydrated || isLoading}
-              isError={isError}
-              total={meta.total}
-              cheapest={meta.cheapest}
-              hasMore={hasNextPage ?? false}
-              isFetchingMore={isFetchingNextPage}
-              onLoadMore={fetchNextPage}
+            <span className="text-[10px] text-muted-foreground">–</span>
+            <input
+              type="range" min={3} max={90} value={filters.maxStayDays}
+              onChange={(e) => setFilters({ maxStayDays: Number(e.target.value) })}
+              className="w-12 sm:w-16 accent-primary"
             />
+            <span className="text-[10px] font-bold text-primary whitespace-nowrap ml-0.5">
+              {filters.minStayDays}–{filters.maxStayDays}d
+            </span>
           </div>
-        </div>
-      </main>
 
-      <footer className="border-t border-border py-4 text-center text-xs text-muted-foreground">
-        Dados coletados diariamente · Confirme preços no Google Flights antes de comprar
-      </footer>
+          {/* Sort */}
+          <select
+            value={filters.sortBy}
+            onChange={(e) => setFilters({ sortBy: e.target.value as 'price' | 'stayDays' })}
+            className="text-xs border border-border rounded-md px-1.5 py-1 bg-white text-foreground font-semibold shrink-0"
+          >
+            <option value="price">R$ ↑</option>
+            <option value="stayDays">Dias ↑</option>
+          </select>
+        </div>
+
+        {/* Row 2: month pills — horizontal scroll */}
+        <div className="px-3 pb-2 flex items-center gap-2 overflow-x-auto">
+          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide shrink-0">Mês</span>
+          <MonthPills
+            availableMonths={availableMonths}
+            selectedMonths={selectedMonths}
+            onChange={handleMonthPillChange}
+          />
+        </div>
+      </div>
+
+      {/* Main split */}
+      <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
+        {/* Calendar */}
+        <div className="w-full max-h-[45vh] md:max-h-none md:w-[390px] md:shrink-0 overflow-y-auto">
+          <CalendarPanel
+            calendarDays={calendarDays}
+            selectedDay={selectedDay}
+            selectedMonths={selectedMonths}
+            onDayClick={handleDayClick}
+            onMonthClick={handleMonthClick}
+          />
+        </div>
+
+        {/* Deals grid */}
+        <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+          <DealsGrid
+            packages={packages}
+            loading={!hydrated || isLoading}
+            title={dealsTitle}
+            subtitle={dealsSubtitle}
+            hasMore={hasNextPage ?? false}
+            isFetchingMore={isFetchingNextPage}
+            onLoadMore={fetchNextPage}
+          />
+        </div>
+      </div>
     </div>
   )
 }

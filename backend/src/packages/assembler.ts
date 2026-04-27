@@ -211,23 +211,36 @@ export async function assemblePackages(
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  // Buscar todos os snapshots ativos com info da rota
-  const flightDateFilter: { gte: Date; lte?: Date } = {
+  const outboundDateFilter: { gte: Date; lte?: Date } = {
     gte: departAfter ?? today,
     ...(departBefore ? { lte: departBefore } : {}),
   }
 
-  const rawData = await prisma.priceSnapshot.findMany({
-    where: {
-      route: { isActive: true },
-      flightDate: flightDateFilter,
-      priceBrl: { not: null, gt: 0 },
-    },
-    include: { route: true },
-    orderBy: { collectedAt: 'desc' },
-  })
+  // Outbound legs + roundtrip bundled: filter by departure date
+  // Return legs: fetch separately without the departure date cap so they aren't excluded
+  const [outboundRaw, returnRaw] = await Promise.all([
+    prisma.priceSnapshot.findMany({
+      where: {
+        route: { isActive: true, origin: 'REC' },
+        flightDate: outboundDateFilter,
+        priceBrl: { not: null, gt: 0 },
+      },
+      include: { route: true },
+      orderBy: { collectedAt: 'desc' },
+    }),
+    prisma.priceSnapshot.findMany({
+      where: {
+        route: { isActive: true, destination: 'REC', tripType: 'oneway' },
+        flightDate: { gte: departAfter ?? today },
+        priceBrl: { not: null, gt: 0 },
+      },
+      include: { route: true },
+      orderBy: { collectedAt: 'desc' },
+    }),
+  ])
 
-  const lastCollected = rawData[0]?.collectedAt?.toISOString() ?? null
+  const rawData = [...outboundRaw, ...returnRaw]
+  const lastCollected = outboundRaw[0]?.collectedAt?.toISOString() ?? null
 
   // Mapear para RawSnapshot
   type RawDataItem = (typeof rawData)[0]

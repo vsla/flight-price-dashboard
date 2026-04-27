@@ -7,6 +7,7 @@ import { packagesRoutes } from './api/routes/packages'
 import { collectRoutes } from './api/routes/collect'
 import { routesRoutes } from './api/routes/routes'
 import { snapshotsRoutes } from './api/routes/snapshots'
+import { calendarRoutes } from './api/routes/calendar'
 import { runDailyFetch } from './scheduler'
 
 const prisma = new PrismaClient()
@@ -22,6 +23,7 @@ async function bootstrap() {
   await collectRoutes(fastify, prisma)
   await routesRoutes(fastify, prisma)
   await snapshotsRoutes(fastify, prisma)
+  await calendarRoutes(fastify, prisma)
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', ts: new Date().toISOString() }))

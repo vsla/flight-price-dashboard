@@ -1,6 +1,7 @@
 # Environment
 .env
 .env*.local
+.superpowers/
 
 # Dependencies
 node_modules/

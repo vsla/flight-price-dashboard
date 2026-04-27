@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useInfiniteQuery } from '@tanstack/react-query'
-import { SearchFilters, DEFAULT_FILTERS, GroupedPackagesResponse } from './types'
-import { fetchPackages } from './api'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { SearchFilters, DEFAULT_FILTERS, GroupedPackagesResponse, CalendarResponse } from './types'
+import { fetchPackages, fetchCalendar } from './api'
 
 const STORAGE_KEY = 'flightsearch_filters'
 
@@ -37,6 +37,22 @@ export function usePersistedFilters() {
   }, [])
 
   return { filters, setFilters, hydrated }
+}
+
+export function useCalendar(
+  destinations: string[],
+  departAfter: string,
+  departBefore: string,
+  minStayDays: number,
+  maxStayDays: number,
+  enabled = true,
+) {
+  return useQuery<CalendarResponse>({
+    queryKey: ['calendar', destinations, departAfter, departBefore, minStayDays, maxStayDays],
+    queryFn: () => fetchCalendar(destinations, departAfter, departBefore, minStayDays, maxStayDays),
+    staleTime: 10 * 60 * 1000,
+    enabled,
+  })
 }
 
 export function useInfinitePackages(filters: SearchFilters, enabled = true) {
