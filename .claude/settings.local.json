@@ -23,7 +23,10 @@
       "Bash(node -e \":*)",
       "Bash(grep -r \"playwright\\\\|puppeteer\" /c/Users/victo/OneDrive/Documentos/Dev/FlightSearch --include=*.json --include=*.ts --include=*.js)",
       "Read(//c/Users/victo/OneDrive/Documentos/Dev/**)",
-      "Read(//c/Users/victo/.ssh/**)"
+      "Read(//c/Users/victo/.ssh/**)",
+      "Bash(claude *)",
+      "Skill(update-config)",
+      "Bash(bash *)"
     ]
   }
 }

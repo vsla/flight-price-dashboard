@@ -17,10 +17,36 @@ docker exec "$LOCAL_CONTAINER" pg_dump \
 docker cp "$LOCAL_CONTAINER:/tmp/sync.dump" "$DUMP_FILE"
 echo "    Dump salvo em: $DUMP_FILE"
 
+echo "==> Liberando porta 5433 (tunnels anteriores)..."
+lsof -ti:5433 | xargs kill -9 2>/dev/null || true
+sleep 1
+
 echo "==> Abrindo tunnel SSH (porta 5433)..."
-ssh -i "$KEY" -L 5433:localhost:5432 $VM_USER@$VM_HOST -N -f -o ExitOnForwardFailure=yes
+ssh -i "$KEY" -L 5433:localhost:5432 "$VM_USER@$VM_HOST" -N -o ExitOnForwardFailure=yes &
 TUNNEL_PID=$!
-sleep 2
+
+echo "    Aguardando tunnel ficar disponível..."
+for i in $(seq 1 15); do
+  if nc -z localhost 5433 2>/dev/null; then
+    echo "    Tunnel pronto."
+    break
+  fi
+  if [ "$i" -eq 15 ]; then
+    echo "ERRO: tunnel não ficou disponível após 15s."
+    kill "$TUNNEL_PID" 2>/dev/null || true
+    exit 1
+  fi
+  sleep 1
+done
+
+echo "==> Recriando banco na VM (drop + create)..."
+docker run --rm \
+  -e PGPASSWORD="$LOCAL_PGPASSWORD" \
+  timescale/timescaledb:latest-pg15 \
+  psql -h host.docker.internal -p 5433 -U "$LOCAL_PGUSER" postgres \
+  -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$LOCAL_DB' AND pid <> pg_backend_pid();" \
+  -c "DROP DATABASE IF EXISTS $LOCAL_DB;" \
+  -c "CREATE DATABASE $LOCAL_DB WITH OWNER $LOCAL_PGUSER;"
 
 echo "==> Restaurando na VM via tunnel..."
 docker run --rm \
@@ -30,10 +56,10 @@ docker run --rm \
   pg_restore \
     -h host.docker.internal -p 5433 \
     -U "$LOCAL_PGUSER" -d "$LOCAL_DB" \
-    --clean --if-exists --no-owner --no-acl \
+    --no-owner --no-acl \
     /dumps/$(basename "$DUMP_FILE")
 
 echo "==> Fechando tunnel..."
-kill $TUNNEL_PID 2>/dev/null || true
+kill "$TUNNEL_PID" 2>/dev/null || true
 
 echo "==> Sync concluído!"

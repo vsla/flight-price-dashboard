@@ -4,6 +4,7 @@ import {
   SnapshotsResponse,
   SnapshotQueryFilters,
   SnapshotSortOrder,
+  CalendarResponse,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
@@ -69,6 +70,44 @@ export async function fetchSnapshots(
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
+}
+
+export async function fetchCalendar(
+  destinations: string[],
+  departAfter: string,
+  departBefore: string,
+  minStayDays: number,
+  maxStayDays: number,
+): Promise<CalendarResponse> {
+  const params = new URLSearchParams()
+  if (destinations.length > 0) params.set("destinations", destinations.join(","))
+  if (departAfter) params.set("departAfter", departAfter)
+  if (departBefore) params.set("departBefore", departBefore)
+  params.set("minStayDays", String(minStayDays))
+  params.set("maxStayDays", String(maxStayDays))
+  const res = await fetch(`${API_URL}/api/calendar?${params.toString()}`, {
+    cache: "no-store",
+  })
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
+
+export function buildGoogleFlightsUrl(
+  origin: string,
+  destination: string,
+  departDate: string,
+  returnDate?: string,
+): string {
+  const fmt = (d: string) =>
+    new Date(d + "T12:00:00").toLocaleDateString("pt-BR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    })
+  const q = returnDate
+    ? `voos ${origin} ${destination} ${fmt(departDate)} volta ${fmt(returnDate)}`
+    : `voos ${origin} ${destination} ${fmt(departDate)}`
+  return `https://www.google.com/travel/flights?q=${encodeURIComponent(q)}&hl=pt-BR&curr=BRL`
 }
 
 export function buildSkyscannerUrl(
