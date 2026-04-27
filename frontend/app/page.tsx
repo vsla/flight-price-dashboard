@@ -29,6 +29,7 @@ function futureStr(months = 12): string {
 export default function Home() {
   const { filters, setFilters, hydrated } = usePersistedFilters()
   const [selectedDay, setSelectedDay] = useState<string | null>(null)
+  const [mobileView, setMobileView] = useState<'calendar' | 'deals'>('deals')
 
   const selectedMonths: string[] = filters.selectedMonths ?? []
 
@@ -202,10 +203,39 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Mobile tab bar */}
+      <div className="md:hidden flex shrink-0 border-b border-border bg-white">
+        <button
+          onClick={() => setMobileView('calendar')}
+          className={cn(
+            'flex-1 py-2 text-sm font-semibold transition-colors',
+            mobileView === 'calendar'
+              ? 'text-primary border-b-2 border-primary'
+              : 'text-muted-foreground',
+          )}
+        >
+          Calendário
+        </button>
+        <button
+          onClick={() => setMobileView('deals')}
+          className={cn(
+            'flex-1 py-2 text-sm font-semibold transition-colors',
+            mobileView === 'deals'
+              ? 'text-primary border-b-2 border-primary'
+              : 'text-muted-foreground',
+          )}
+        >
+          Pacotes
+        </button>
+      </div>
+
       {/* Main split */}
       <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
         {/* Calendar */}
-        <div className="w-full max-h-[45vh] md:max-h-none md:w-[390px] md:shrink-0 overflow-y-auto">
+        <div className={cn(
+          'w-full overflow-y-auto md:max-h-none md:w-[490px] md:shrink-0 md:block',
+          mobileView === 'calendar' ? 'block max-h-[calc(100dvh-8rem)]' : 'hidden',
+        )}>
           <CalendarPanel
             calendarDays={calendarDays}
             selectedDay={selectedDay}
@@ -216,7 +246,7 @@ export default function Home() {
         </div>
 
         {/* Deals grid */}
-        <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+        <div className={cn('flex-1 min-h-0 min-w-0 overflow-hidden md:block', mobileView === 'deals' ? 'block' : 'hidden')}>
           <DealsGrid
             packages={packages}
             loading={!hydrated || isLoading}
