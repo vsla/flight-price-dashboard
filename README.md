@@ -1,7 +1,7 @@
 # FlightSearch
 
-Monitoramento de passagens aéreas de **Recife para Europa** (Lisboa e Madrid).
-Coleta preços diariamente via scraping do Skyscanner e monta pacotes comparáveis — tickets separados, ida e volta combinado, open jaw — ranqueados por score.
+Monitoramento de passagens aéreas de **Recife para Europa** (Lisboa, Madrid, Porto).
+Coleta preços diariamente via HTTP e APIs externas, monta pacotes comparáveis — tickets separados, ida e volta combinado, open jaw — e os exibe em um calendário de preços interativo.
 
 ---
 
@@ -11,11 +11,11 @@ Coleta preços diariamente via scraping do Skyscanner e monta pacotes comparáve
 |--------|-----------|
 | Backend API | Node.js + Fastify + TypeScript |
 | ORM | Prisma |
-| Banco de dados | PostgreSQL |
-| Scraper | Playwright (Chromium) — Skyscanner month view |
+| Banco de dados | PostgreSQL (TimescaleDB) |
+| Scraper | HTTP client direto (Skyscanner monthviewservice, sem browser) |
 | Coletores auxiliares | Aviasales (Travelpayouts), Amadeus, SerpAPI |
 | Scheduler | node-cron (coleta diária às 06:00 UTC) |
-| Frontend | Next.js 16 + shadcn/ui + Tailwind CSS v4 |
+| Frontend | Next.js 16 + Tailwind CSS v4 + shadcn/ui |
 | State management | TanStack Query v5 |
 
 ---
@@ -23,16 +23,17 @@ Coleta preços diariamente via scraping do Skyscanner e monta pacotes comparáve
 ## Estrutura do Projeto
 
 ```
-FlightSearch/
+flight-price-dashboard/
 ├── backend/
 │   ├── src/
 │   │   ├── api/routes/
+│   │   │   ├── calendar.ts      # GET  /api/calendar
 │   │   │   ├── packages.ts      # GET  /api/packages
 │   │   │   ├── routes.ts        # CRUD /api/routes
 │   │   │   ├── snapshots.ts     # GET  /api/snapshots
 │   │   │   └── collect.ts       # POST /api/collect
 │   │   ├── collectors/
-│   │   │   ├── skyscanner.ts    # Playwright scraper (fonte principal v1)
+│   │   │   ├── skyscanner.ts    # HTTP direto ao monthviewservice
 │   │   │   ├── aviasales.ts     # Travelpayouts API
 │   │   │   ├── amadeus.ts       # Amadeus API
 │   │   │   ├── serpapi.ts       # SerpAPI — Google Flights (roundtrips)
@@ -46,32 +47,41 @@ FlightSearch/
 │   │   └── collect.ts           # Script de coleta manual (npm run collect)
 │   ├── prisma/
 │   │   ├── schema.prisma        # Models: Route, PriceSnapshot, PriceAlert, SearchQuery
-│   │   └── seed.ts              # Seed das 6 rotas padrão
+│   │   └── seed.ts              # Seed das rotas padrão
 │   ├── scripts/
-│   │   ├── test-skyscanner.ts   # Teste isolado do scraper
 │   │   └── clear-snapshots.ts   # Limpa todos os snapshots do banco
 │   ├── .env.example
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
 │   ├── app/
-│   │   ├── page.tsx             # Página principal
-│   │   ├── dashboard/           # Dashboard de monitoramento
+│   │   ├── page.tsx             # /         — Explorar preços (calendário + cards)
+│   │   ├── planejar/page.tsx    # /planejar — Busca guiada (destino + duração)
+│   │   ├── dashboard/page.tsx   # /dashboard — Dados brutos + stats
 │   │   ├── layout.tsx
 │   │   └── globals.css
 │   ├── components/
-│   │   ├── SearchPanel.tsx      # Formulário de busca (salvo no localStorage)
-│   │   ├── FilterSidebar.tsx    # Filtros: paradas, companhia, ordenação
-│   │   ├── PackageCard.tsx      # Card de pacote
-│   │   └── PackageList.tsx      # Lista com skeleton + empty state
+│   │   ├── CalendarPanel.tsx    # Heatmap de preços por data (clicável)
+│   │   ├── DealCard.tsx         # Card de pacote com links Google Flights + Skyscanner
+│   │   ├── DealsGrid.tsx        # Grid responsivo com scroll infinito
+│   │   ├── MonthPills.tsx       # Filtro de mês (multi-select horizontal)
+│   │   └── NavBar.tsx           # Navbar compartilhada (mobile-friendly)
 │   ├── lib/
-│   │   ├── api.ts               # Cliente HTTP
-│   │   ├── hooks.ts             # usePackages (TanStack Query)
+│   │   ├── api.ts               # Cliente HTTP + helpers de URL
+│   │   ├── hooks.ts             # useCalendar, useInfinitePackages, usePersistedFilters
 │   │   └── types.ts             # Interfaces TypeScript
 │   └── package.json
-├── docker-compose.yml           # PostgreSQL + pgAdmin
-└── docs/
-    └── database-migration.md
+├── scripts/
+│   ├── config.sh                # IP da VM, chave SSH (usa $FLIGHTSEARCH_KEY)
+│   ├── ssh-vm.sh                # Abre SSH na VM
+│   ├── tunnel-db.sh             # Tunnel SSH para o banco da VM
+│   └── sync-db-to-vm.sh         # Dump local + restore na VM
+├── docs/
+│   ├── sync-db-to-vm.md         # Guia de sincronização do banco
+│   └── database-migration.md
+├── docker-compose.yml           # TimescaleDB + pgAdmin local
+├── OPERATIONS.md                # Guia de deploy, VM e operações
+└── .env.example                 # Variáveis de ambiente do backend
 ```
 
 ---
@@ -79,11 +89,11 @@ FlightSearch/
 ## Pré-requisitos
 
 - Node.js 20+
-- Docker (para o banco de dados)
+- Docker Desktop
 
 ---
 
-## Setup
+## Setup Local
 
 ### 1. Banco de dados
 
@@ -101,101 +111,91 @@ cp .env.example .env
 # Preencha as variáveis no .env (veja seção abaixo)
 
 npm install
-npm run install:playwright   # Instala o Chromium (~300MB) — necessário para o scraper
-
-npx prisma db push           # Cria as tabelas
-npm run db:seed              # Insere as 6 rotas padrão
-npm run dev                  # Inicia em localhost:3001
+npx prisma db push    # Cria as tabelas
+npm run db:seed       # Insere as rotas padrão
+npm run dev           # Inicia em localhost:3001
 ```
 
 ### 3. Frontend
 
 ```bash
 cd frontend
+cp .env.example .env.local
+# Ajuste NEXT_PUBLIC_API_URL se necessário
+
 npm install
-npm run dev                  # Inicia em localhost:3000
+npm run dev           # Inicia em localhost:3000
 ```
 
 ---
 
-## Variáveis de Ambiente (`backend/.env`)
+## Variáveis de Ambiente
+
+### `backend/.env`
 
 ```env
 DATABASE_URL=postgresql://postgres:flighttracker@localhost:5432/flights
 
-# Skyscanner Scraper — usa Playwright (sem quota de API)
-# Execute `npm run install:playwright` para instalar o Chromium (~300MB)
+# Skyscanner — HTTP direto (sem browser)
+# Cookies: DevTools → Network → /pricecalendar → copiar header "cookie"
+# Renovar quando receber HTTP 403
 SKYSCANNER_ENABLED=true
-SKYSCANNER_HEADED=false    # true para abrir janela visível (debug local)
+SKYSCANNER_COOKIES=
 
 # Aviasales / Travelpayouts — https://travelpayouts.com/
-AVIASALES_TOKEN=your_token_here
+AVIASALES_TOKEN=
 
-# Amadeus — https://developers.amadeus.com/
-AMADEUS_CLIENT_ID=your_client_id
-AMADEUS_CLIENT_SECRET=your_client_secret
+# Amadeus — https://developers.amadeus.com/ (usar produção, não sandbox)
+AMADEUS_CLIENT_ID=
+AMADEUS_CLIENT_SECRET=
 
-# SerpAPI — https://serpapi.com/ (free: 250 queries/mês, usado para roundtrips)
-SERPAPI_KEY=your_serpapi_key
-
-# SearchAPI — https://searchapi.io/ (100 queries/mês free — comentado no scheduler v1)
-# SEARCHAPI_KEY=your_searchapi_key
+# SerpAPI — https://serpapi.com/ (250 queries/mês free)
+SERPAPI_KEY=
 
 FRONTEND_URL=http://localhost:3000
 PORT=3001
+
+# Desativa o cron (false = roda cron; true = só API, sem coleta automática)
+DISABLE_CRON=false
+```
+
+### `frontend/.env.local`
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:3001
 ```
 
 ---
 
 ## Coletores de Dados
 
-### Skyscanner Scraper (fonte principal — v1)
+### Skyscanner (fonte principal)
 
-Raspa a view de calendário mensal do Skyscanner usando Playwright. Retorna o preço mais barato por dia para um mês inteiro, sem consumir quota de API.
+Chama o endpoint interno `monthviewservice` que a página de calendário do Skyscanner usa. Retorna o preço mais barato por dia para um mês inteiro, sem browser nem Playwright.
 
-- **Como funciona:** navega até `skyscanner.com.br/transporte/passagens-aereas/{origin}/{dest}/?oym={YYMM}`, aguarda o calendário carregar e extrai preços dos atributos `aria-label` de cada célula
-- **Cobertura:** 12 meses por rota — mês atual + 11 seguintes (uma chamada por mês)
-- **Anti-detecção:** browser headless com patches (remove `navigator.webdriver`), User-Agent real do Chrome, locale pt-BR, delays aleatórios de 5-10s entre meses e 8-15s entre rotas
-- **Staleness gate:** só recoleta se o último snapshot for mais velho que 3 dias
+- **Como funciona:** HTTP GET com cookies de sessão válidos → resposta JSON com preços diários
+- **Cobertura:** 12 meses por rota (mês atual + 11 seguintes)
+- **Renovação de cookies:** quando receber HTTP 403, obter novos cookies via DevTools e atualizar `SKYSCANNER_COOKIES` no `.env`
 - **Limitação:** não retorna companhia aérea, número de escalas ou duração — somente data + preço
-
-**Testar isoladamente:**
-```bash
-npx tsx backend/scripts/test-skyscanner.ts REC MAD 2026-11
-# Esperado: ~25-28 registros com priceBrl > 0
-```
-
-**Bot detection:** se headless for bloqueado pelo Cloudflare, adicione `SKYSCANNER_HEADED=true` no `.env` para abrir com janela visível.
 
 ### Coletores Auxiliares
 
-| Coletor | API | Uso | Free tier |
-|---------|-----|-----|-----------|
-| `aviasales.ts` | Travelpayouts | Calendário mensal e preços baratos | Gratuito |
-| `amadeus.ts` | Amadeus for Developers | Ofertas por data e amostra mensal | 10k calls/mês |
-| `serpapi.ts` | SerpAPI | Roundtrips via Google Flights | 250 queries/mês |
-| `searchapi.ts` | SearchAPI.io | Calendário Google Flights (comentado no scheduler v1) | 100 queries/mês |
+| Coletor | API | Free tier |
+|---------|-----|-----------|
+| `aviasales.ts` | Travelpayouts | Gratuito |
+| `amadeus.ts` | Amadeus for Developers | 10k calls/mês |
+| `serpapi.ts` | SerpAPI | 250 queries/mês |
+| `searchapi.ts` | SearchAPI.io | 100 queries/mês |
 
 ---
 
 ## Scheduler
 
-Coleta automática todo dia às **06:00 UTC** enquanto o servidor estiver ativo.
-
-**Fluxo por rota (v1 — Skyscanner):**
-1. Verifica staleness: pula se o último snapshot `source='skyscanner'` for menor que 3 dias
-2. Gera lista de 12 meses (`YYYY-MM`): mês atual + 11 seguintes
-3. Para cada mês: `fetchMonthView(origin, destination, yearMonth)`
-4. Aguarda 5-10s (delay aleatório) entre meses
-5. Aguarda 8-15s entre rotas
-6. Salva todos os snapshots válidos (`priceBrl > 0`) no banco
-7. Fecha o browser Playwright ao fim do run
+Coleta automática todo dia às **06:00 UTC**.
 
 **Coleta manual:**
 ```bash
-cd backend
-npm run collect
-# Gera log em backend/logs/collect-{ISO-DATE}.log
+cd backend && npm run collect
 ```
 
 **Via API:**
@@ -222,28 +222,15 @@ id, collectedAt, routeId, flightDate, returnDate, airline, priceBrl, priceEur,
 stops, durationMinutes, source (skyscanner|aviasales|amadeus|serpapi|searchapi)
 ```
 
-**PriceAlert** — Alertas de preço (preparado para uso futuro)
-```
-id, routeId, thresholdBrl, isActive, createdAt, notifiedAt
-```
-
-**SearchQuery** — Buscas avançadas (preparado para multi-usuário)
-```
-id, userId, origins[], destinations[], minStayDays, maxStayDays,
-departAfter, departBefore, alertEmail, isActive, createdAt, lastRunAt
-```
-
 ### Comandos úteis
 
 ```bash
-docker compose up -d           # Inicia PostgreSQL
-npx prisma db push             # Aplica schema
-npm run db:seed                # Insere 6 rotas padrão
-npx prisma studio              # Interface visual (localhost:5555)
+docker compose up -d           # Inicia o banco
+npx prisma db push             # Aplica schema (sem migration history)
+npm run db:seed                # Insere rotas padrão
+cd backend && npm run db:studio  # Prisma Studio (localhost:5555)
 npm run db:clear-snapshots     # Limpa todos os snapshots
 ```
-
-Backup/restore: veja `docs/database-migration.md`
 
 ---
 
@@ -253,8 +240,10 @@ Backup/restore: veja `docs/database-migration.md`
 |--------|---------|------|
 | REC | LIS | oneway |
 | REC | MAD | oneway |
+| REC | OPO | oneway |
 | LIS | REC | oneway |
 | MAD | REC | oneway |
+| OPO | REC | oneway |
 | REC | LIS | roundtrip |
 | REC | MAD | roundtrip |
 
@@ -262,42 +251,59 @@ Backup/restore: veja `docs/database-migration.md`
 
 ## Package Assembler
 
-O assembler combina snapshots de ida e volta para montar pacotes comparáveis, aplicando scoring e tags automáticas.
+Combina snapshots de ida e volta para montar pacotes comparáveis, com scoring e tags automáticas.
 
 ### Estratégias
 
 | Estratégia | Descrição |
 |-----------|-----------|
-| `roundtrip_bundled` | Ticket único ida+volta (da fonte `tripType='roundtrip'`) |
-| `separate_same` | Dois tickets oneway, mesmo aeroporto de retorno (ex: REC→MAD + MAD→REC) |
-| `open_jaw` | Dois tickets oneway, aeroportos diferentes (ex: REC→MAD + LIS→REC) |
+| `roundtrip_bundled` | Ticket único ida+volta (`tripType='roundtrip'`) |
+| `separate_same` | Dois tickets oneway, mesmo aeroporto de retorno (REC→MAD + MAD→REC) |
+| `open_jaw` | Dois tickets oneway, aeroportos diferentes (REC→MAD + LIS→REC) |
 
-### Algoritmo de Score (0–100)
+### Score (0–100)
 
 | Critério | Pontos |
 |---------|--------|
 | Preço no percentil mais baixo | até 40 |
 | Ambos os voos diretos | 20 |
-| Estadia ideal (20-30 dias) | 15 |
+| Estadia ideal 20–30 dias | 15 |
 | Mesma companhia nos dois trechos | 15 |
 | Dados recentes | 10 |
 
-### Tags Automáticas
+### Tags automáticas
 
-`mais_barato` — top 3 mais baratos  
-`melhor_valor` — top 3 por score  
-`direto` — ambos os trechos sem escala  
-`open_jaw` — aeroportos de saída e chegada diferentes  
-`mesma_cia` — mesma companhia nos dois trechos  
-`longa_estadia` — 25+ dias
-
-### Agrupamento
-
-O endpoint `/api/packages` retorna grupos por `(data de saída, destino)`. Cada grupo contém a opção de ida mais barata e todas as opções de volta disponíveis (`returnOptions`), ordenadas por preço.
+`mais_barato` · `melhor_valor` · `direto` · `open_jaw` · `mesma_cia` · `longa_estadia`
 
 ---
 
 ## API Reference
+
+### GET /api/calendar
+
+Retorna o preço mais barato de round-trip por data de saída e destino. Usado pelo heatmap do calendário.
+
+**Query params:**
+
+| Param | Default | Descrição |
+|-------|---------|-----------|
+| `destinations` | `LIS,MAD,OPO` | Códigos IATA separados por vírgula |
+| `departAfter` | hoje | Data mínima de partida (YYYY-MM-DD) |
+| `departBefore` | hoje + 12 meses | Data máxima de partida |
+| `minStayDays` | `14` | Mínimo de dias de estadia |
+| `maxStayDays` | `30` | Máximo de dias de estadia |
+
+**Resposta:**
+```json
+{
+  "days": [
+    { "date": "2026-11-10", "destination": "MAD", "cheapestPrice": 4800 },
+    { "date": "2026-11-10", "destination": "LIS", "cheapestPrice": 5100 }
+  ]
+}
+```
+
+---
 
 ### GET /api/packages
 
@@ -305,20 +311,20 @@ Retorna pacotes agrupados por data de saída e destino.
 
 **Query params:**
 
-| Param | Tipo | Default | Descrição |
-|-------|------|---------|-----------|
-| `destinations` | string | `LIS,MAD` | Códigos IATA separados por vírgula |
-| `minStayDays` | number | `5` | Mínimo de dias de estadia |
-| `maxStayDays` | number | `60` | Máximo de dias de estadia |
-| `departAfter` | date | hoje | Data mínima de partida (YYYY-MM-DD) |
-| `departBefore` | date | — | Data máxima de partida |
-| `returnBefore` | date | — | Data máxima de retorno |
-| `maxStops` | number | — | Máximo de paradas (0 = direto) |
-| `maxPriceBrl` | number | — | Preço máximo total em BRL |
-| `sameAirline` | boolean | — | Filtrar por mesma companhia |
-| `sortBy` | string | `score` | `price` \| `score` \| `stayDays` |
-| `limit` | number | `15` | Máximo de grupos retornados |
-| `offset` | number | `0` | Paginação |
+| Param | Default | Descrição |
+|-------|---------|-----------|
+| `destinations` | `LIS,MAD` | Códigos IATA separados por vírgula |
+| `minStayDays` | `5` | Mínimo de dias de estadia |
+| `maxStayDays` | `60` | Máximo de dias de estadia |
+| `departAfter` | hoje | Data mínima de partida (YYYY-MM-DD) |
+| `departBefore` | — | Data máxima de partida |
+| `returnBefore` | — | Data máxima de retorno |
+| `maxStops` | — | Máximo de paradas (0 = direto) |
+| `maxPriceBrl` | — | Preço máximo total em BRL |
+| `sameAirline` | — | Filtrar por mesma companhia |
+| `sortBy` | `score` | `price` \| `score` \| `stayDays` |
+| `limit` | `15` | Máximo de grupos retornados |
+| `offset` | `0` | Paginação |
 
 **Resposta:**
 ```json
@@ -329,19 +335,15 @@ Retorna pacotes agrupados por data de saída e destino.
       "departureDate": "2026-11-12",
       "flyTo": "MAD",
       "origin": "REC",
-      "outbound": { "date": "...", "priceBrl": 1803, "stops": 0, ... },
+      "outbound": { "date": "2026-11-12", "priceBrl": 1803, "stops": 0 },
       "cheapestPrice": 3606,
       "returnOptions": [
-        { "returnDate": "...", "totalPriceBrl": 3606, "stayDays": 20, ... }
+        { "returnDate": "2026-12-02", "totalPriceBrl": 3606, "stayDays": 20 }
       ],
       "tags": ["mais_barato", "melhor_valor"]
     }
   ],
-  "meta": {
-    "total": 48,
-    "cheapest": 3606,
-    "lastCollected": "2026-04-10T06:00:00.000Z"
-  }
+  "meta": { "total": 48, "cheapest": 3606, "lastCollected": "2026-04-27T06:00:00.000Z" }
 }
 ```
 
@@ -357,36 +359,16 @@ DELETE /api/routes/:id              Remove rota e seus snapshots
 POST   /api/routes/:id/collect      Coleta manual para uma rota
 ```
 
-**Criar rota:**
-```bash
-curl -X POST http://localhost:3001/api/routes \
-  -H "Content-Type: application/json" \
-  -d '{"origin":"REC","destination":"BCN","tripType":"oneway"}'
-```
-
-**Ativar/desativar rota:**
-```bash
-curl -X PATCH http://localhost:3001/api/routes/3 \
-  -H "Content-Type: application/json" \
-  -d '{"isActive":false}'
-```
-
----
-
 ### Coleta
 
 ```
 POST /api/collect              Dispara coleta de todas as rotas ativas
 GET  /api/collect/status       Verifica se coleta está em andamento
-POST /api/routes/:id/collect   Coleta apenas uma rota específica
 ```
-
----
 
 ### Outros
 
 ```
-GET /api/snapshots    Snapshots brutos
-                      Params: origin, destination, tripType, after, before, order
+GET /api/snapshots    Snapshots brutos (params: origin, destination, tripType, after, before, order)
 GET /health           Health check
 ```
