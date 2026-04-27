@@ -154,7 +154,7 @@ PORT=3001
 Raspa a view de calendário mensal do Skyscanner usando Playwright. Retorna o preço mais barato por dia para um mês inteiro, sem consumir quota de API.
 
 - **Como funciona:** navega até `skyscanner.com.br/transporte/passagens-aereas/{origin}/{dest}/?oym={YYMM}`, aguarda o calendário carregar e extrai preços dos atributos `aria-label` de cada célula
-- **Cobertura:** 10 meses à frente por rota (uma chamada por mês)
+- **Cobertura:** 12 meses por rota — mês atual + 11 seguintes (uma chamada por mês)
 - **Anti-detecção:** browser headless com patches (remove `navigator.webdriver`), User-Agent real do Chrome, locale pt-BR, delays aleatórios de 5-10s entre meses e 8-15s entre rotas
 - **Staleness gate:** só recoleta se o último snapshot for mais velho que 3 dias
 - **Limitação:** não retorna companhia aérea, número de escalas ou duração — somente data + preço
@@ -184,7 +184,7 @@ Coleta automática todo dia às **06:00 UTC** enquanto o servidor estiver ativo.
 
 **Fluxo por rota (v1 — Skyscanner):**
 1. Verifica staleness: pula se o último snapshot `source='skyscanner'` for menor que 3 dias
-2. Gera lista dos próximos 10 meses (`YYYY-MM`)
+2. Gera lista de 12 meses (`YYYY-MM`): mês atual + 11 seguintes
 3. Para cada mês: `fetchMonthView(origin, destination, yearMonth)`
 4. Aguarda 5-10s (delay aleatório) entre meses
 5. Aguarda 8-15s entre rotas
