@@ -130,12 +130,12 @@ export function CalendarPanel({
               onClick={() => onMonthClick(ym)}
               className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-muted/40 transition-colors text-left"
             >
-              <span className="font-bold text-xs text-foreground">
+              <span className="font-bold text-sm text-foreground">
                 {formatMonthHeader(ym)}
               </span>
               {monthMin !== null && (
                 <span className={cn(
-                  'text-[10px] font-bold',
+                  'text-[13px] font-bold',
                   monthMinTier === 'vc' || monthMinTier === 'c' ? 'text-green-700' : 'text-muted-foreground',
                 )}>
                   desde {formatCheapest(monthMin)}
@@ -146,14 +146,14 @@ export function CalendarPanel({
             {/* Week day labels */}
             <div className="grid grid-cols-7 px-2.5 mb-0.5">
               {WEEK_LABELS.map((l, i) => (
-                <div key={i} className="text-center text-[9px] font-semibold text-muted-foreground/60 py-0.5">
+                <div key={i} className="text-center text-[12px] font-semibold text-muted-foreground/60 py-0.5">
                   {l}
                 </div>
               ))}
             </div>
 
             {/* Day grid */}
-            <div className="grid grid-cols-7 gap-[3px] px-2.5 pb-2.5">
+            <div className="grid grid-cols-7 gap-[4px] px-2.5 pb-2.5">
               {Array.from({ length: offset }).map((_, i) => (
                 <div key={`e-${i}`} />
               ))}
@@ -167,9 +167,9 @@ export function CalendarPanel({
                   return (
                     <div
                       key={day}
-                      className="rounded-[4px] py-[3px] text-center bg-muted/30"
+                      className="rounded-[4px] py-[6px] text-center bg-muted/30"
                     >
-                      <div className="text-[9px] text-muted-foreground/30 leading-none">{day}</div>
+                      <div className="text-[12px] text-muted-foreground/30 leading-none">{day}</div>
                     </div>
                   )
                 }
@@ -182,13 +182,13 @@ export function CalendarPanel({
                     key={day}
                     onClick={() => onDayClick(date)}
                     className={cn(
-                      'rounded-[4px] py-[3px] text-center transition-transform hover:scale-110 hover:z-10 hover:shadow-md relative',
+                      'rounded-[4px] py-[6px] text-center transition-transform hover:scale-110 hover:z-10 hover:shadow-md relative',
                       bg,
                       isSelected && 'ring-2 ring-primary ring-offset-1 scale-105 z-10 shadow-md',
                     )}
                   >
-                    <div className={cn('text-[9px] leading-none mb-[2px]', numText)}>{day}</div>
-                    <div className={cn('text-[7.5px] font-bold leading-none', text)}>
+                    <div className={cn('text-[12px] leading-none mb-[2px]', numText)}>{day}</div>
+                    <div className={cn('text-[11px] font-bold leading-none', text)}>
                       {formatPrice(price)}
                     </div>
                   </button>
@@ -201,7 +201,7 @@ export function CalendarPanel({
 
       {/* Legend */}
       <div className="flex items-center gap-2 flex-wrap pb-4 px-1">
-        <span className="text-[10px] text-muted-foreground font-medium">Preços:</span>
+        <span className="text-[13px] text-muted-foreground font-medium">Preços:</span>
         {[
           { label: 'Muito barato', cls: 'bg-green-700' },
           { label: 'Barato',       cls: 'bg-green-400' },
@@ -211,7 +211,7 @@ export function CalendarPanel({
         ].map((item) => (
           <div key={item.label} className="flex items-center gap-1">
             <div className={cn('w-2.5 h-2.5 rounded-[2px]', item.cls)} />
-            <span className="text-[10px] text-muted-foreground">{item.label}</span>
+            <span className="text-[13px] text-muted-foreground">{item.label}</span>
           </div>
         ))}
       </div>
